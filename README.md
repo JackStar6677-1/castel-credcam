@@ -36,10 +36,10 @@ Revisa el archivo [LICENSE](LICENSE).
 
 ## Instalacion
 
-Abre PowerShell dentro de esta carpeta:
+Clona o descarga el proyecto y abre PowerShell dentro de la carpeta del repositorio:
 
 ```powershell
-cd C:\Users\Jack\Documents\GitHub\Experimentos\CastelCredCam
+cd CastelCredCam
 ```
 
 Instala dependencias:
@@ -74,30 +74,18 @@ Tambien puedes abrir:
 run_castel_credcam.bat
 ```
 
-## Ejecucion con Iriun en este equipo
+## Ejecucion con una camara preseleccionada
 
-En esta maquina, la revision local dejo Iriun como:
-
-- alias: `Iriun Webcam (celular)`
-- indice: `0`
-- backend: `DirectShow`
-
-Puedes abrir directamente:
-
-```text
-run_castel_credcam_iriun.bat
-```
-
-o desde consola:
+Si ya sabes que combinacion de camara y backend quieres usar, puedes lanzar la app con argumentos:
 
 ```powershell
 py .\castel_credcam.py --camera-index 0 --backend dshow
 ```
 
-Ademas se dejo un acceso directo en el escritorio:
+Tambien puedes crear o editar un lanzador `.bat` para tu equipo, por ejemplo:
 
 ```text
-CastelCredCam Iriun.lnk
+run_castel_credcam_iriun.bat
 ```
 
 ## Nombres de camara
@@ -108,12 +96,11 @@ La app usa aliases legibles desde:
 camera_aliases.json
 ```
 
-Ejemplo de aliases en este equipo:
+Ejemplos de aliases:
 
 - `Iriun Webcam (celular)`
 - `DroidCam Video`
 - `iVCam`
-- `Camara virtual inestable`
 
 Si cambia el orden de las camaras en Windows, puedes editar ese archivo y cambiar:
 
@@ -125,7 +112,7 @@ Si cambia el orden de las camaras en Windows, puedes editar ese archivo y cambia
 
 1. Elegir `modo prueba` o `modo curso`.
 2. Si es curso, escribir el nombre del curso.
-3. Elegir la camara, o usar el lanzador preparado para Iriun.
+3. Elegir la camara, o usar un lanzador preparado para una camara concreta.
 4. En la ventana, escribir el nombre del estudiante directamente sobre el preview.
 5. En la ventana:
    - haz clic dentro del preview si el teclado no responde
@@ -211,7 +198,7 @@ Notas rapidas:
 - Iriun suele ser facil de hacer andar como camara virtual simple.
 - DroidCam soporta Wi-Fi y USB.
 - iVCam soporta Wi-Fi y USB y tiene muchas opciones de camara.
-- Camo suele verse muy bien, pero es mas “producto premium”.
+- Camo suele verse muy bien, pero es mas "producto premium".
 
 ## Sugerencias de uso real
 
