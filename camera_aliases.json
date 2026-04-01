@@ -3,7 +3,7 @@
     {
       "index": 0,
       "backend": "dshow",
-      "label": "Iriun Webcam (celular)"
+      "label": "Camara laptop"
     },
     {
       "index": 1,
@@ -16,9 +16,14 @@
       "label": "iVCam"
     },
     {
-      "index": 3,
+      "index": 2,
       "backend": "dshow",
       "label": "Camara virtual inestable"
+    },
+    {
+      "index": 3,
+      "backend": "dshow",
+      "label": "Iriun Webcam (celular)"
     }
   ]
 }

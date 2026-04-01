@@ -74,12 +74,45 @@ Tambien puedes abrir:
 run_castel_credcam.bat
 ```
 
+## GUI nueva
+
+Se agrego una version mas completa dentro de:
+
+```text
+GUI/
+```
+
+Incluye:
+
+- interfaz completa en Tkinter
+- tema morado/dorado
+- panel lateral con sesion, camara y acciones
+- preview grande
+- selector de camara dentro del propio preview
+- opcion de voltear la imagen dentro del preview
+- escritura del nombre dentro de la misma interfaz
+- ayuda visual de rostro opcional
+- lista de capturas recientes
+
+Para abrirla:
+
+```powershell
+cd GUI
+py .\castel_credcam_gui.py
+```
+
+o con doble clic:
+
+```text
+GUI\run_castel_credcam_gui.bat
+```
+
 ## Ejecucion con una camara preseleccionada
 
 Si ya sabes que combinacion de camara y backend quieres usar, puedes lanzar la app con argumentos:
 
 ```powershell
-py .\castel_credcam.py --camera-index 0 --backend dshow
+py .\castel_credcam.py --camera-index 3 --backend dshow
 ```
 
 Tambien puedes crear o editar un lanzador `.bat` para tu equipo, por ejemplo:
@@ -87,6 +120,12 @@ Tambien puedes crear o editar un lanzador `.bat` para tu equipo, por ejemplo:
 ```text
 run_castel_credcam_iriun.bat
 ```
+
+En la configuracion actual del proyecto, el lanzador de Iriun apunta a:
+
+- alias: `Iriun Webcam (celular)`
+- indice: `3`
+- backend: `DirectShow`
 
 ## Nombres de camara
 
@@ -98,6 +137,7 @@ camera_aliases.json
 
 Ejemplos de aliases:
 
+- `Camara laptop`
 - `Iriun Webcam (celular)`
 - `DroidCam Video`
 - `iVCam`
@@ -133,6 +173,9 @@ CastelCredCam/
 |-- castel_credcam.py
 |-- camera_aliases.json
 |-- camera_diagnostic.py
+|-- GUI/
+|   |-- castel_credcam_gui.py
+|   `-- run_castel_credcam_gui.bat
 |-- requirements.txt
 |-- run_castel_credcam.bat
 |-- run_castel_credcam_iriun.bat
