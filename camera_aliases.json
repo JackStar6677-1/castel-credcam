@@ -1,0 +1,24 @@
+{
+  "aliases": [
+    {
+      "index": 0,
+      "backend": "dshow",
+      "label": "Iriun Webcam (celular)"
+    },
+    {
+      "index": 1,
+      "backend": "msmf",
+      "label": "DroidCam Video"
+    },
+    {
+      "index": 2,
+      "backend": "dshow",
+      "label": "iVCam"
+    },
+    {
+      "index": 3,
+      "backend": "dshow",
+      "label": "Camara virtual inestable"
+    }
+  ]
+}

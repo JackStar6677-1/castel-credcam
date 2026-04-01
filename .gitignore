@@ -1,2 +1,17 @@
 __pycache__/
 fotos/
+camera_diagnostic/
+iriun_diag_*.jpg
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+Thumbs.db
+Desktop.ini
