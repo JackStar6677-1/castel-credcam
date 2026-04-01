@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ TEXT_SCALE = 0.58
 TEXT_THICKNESS = 1
 TEXT_LINE = 21
 CAMERA_ALIASES_FILENAME = "camera_aliases.json"
+LAST_CAMERA_FILENAME = "last_camera.json"
 
 
 @dataclass
@@ -69,6 +71,55 @@ class SessionContext:
         return f"{prefix}_{photo_id:03d}.jpg"
 
 
+def silence_opencv_logs() -> None:
+    try:
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+    except Exception:
+        pass
+
+
+@contextmanager
+def suppress_native_stderr():
+    stderr = None
+    duplicated = None
+    try:
+        stderr = sys.stderr.fileno()
+        duplicated = os.dup(stderr)
+        with open(os.devnull, "w") as devnull:
+            os.dup2(devnull.fileno(), stderr)
+            yield
+    except Exception:
+        yield
+    finally:
+        try:
+            if duplicated is not None and stderr is not None:
+                os.dup2(duplicated, stderr)
+                os.close(duplicated)
+        except Exception:
+            pass
+
+
+def load_last_camera(app_dir: Path) -> tuple[Optional[int], Optional[str]]:
+    path = app_dir / LAST_CAMERA_FILENAME
+    if not path.exists():
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        index = payload.get("index")
+        backend = payload.get("backend")
+        if isinstance(index, int) and isinstance(backend, str):
+            return index, backend.lower()
+    except Exception:
+        pass
+    return None, None
+
+
+def save_last_camera(app_dir: Path, index: int, backend_key: str) -> None:
+    path = app_dir / LAST_CAMERA_FILENAME
+    payload = {"index": index, "backend": backend_key}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def load_camera_aliases(app_dir: Path) -> dict[tuple[int, str], str]:
     alias_path = app_dir / CAMERA_ALIASES_FILENAME
     if not alias_path.exists():
@@ -95,6 +146,34 @@ def load_camera_aliases(app_dir: Path) -> dict[tuple[int, str], str]:
 def get_camera_alias(aliases: dict[tuple[int, str], str], index: int, backend_id: int) -> str:
     backend_key = next((key for key, value in BACKEND_LOOKUP.items() if value[1] == backend_id), "any")
     return aliases.get((index, backend_key), f"Camara {index}")
+
+
+def backend_key_from_id(backend_id: int) -> str:
+    for key, value in BACKEND_LOOKUP.items():
+        if value[1] == backend_id:
+            return key
+    return "any"
+
+
+def camera_priority(alias: str, backend_name: str) -> tuple[int, int]:
+    alias_lower = alias.lower()
+    if "iriun" in alias_lower:
+        score = 0
+    elif "droid" in alias_lower:
+        score = 1
+    elif "ivcam" in alias_lower:
+        score = 2
+    elif "camo" in alias_lower:
+        score = 3
+    elif "laptop" in alias_lower or "integrated" in alias_lower:
+        score = 6
+    elif "inestable" in alias_lower:
+        score = 9
+    else:
+        score = 5
+
+    backend_score = 0 if backend_name == "DirectShow" else 1
+    return score, backend_score
 
 
 def sanitize_folder_name(value: str) -> str:
@@ -207,7 +286,8 @@ def initialize_session(app_dir: Path) -> SessionContext:
 
 
 def open_camera(index: int, backend: int = cv2.CAP_ANY) -> cv2.VideoCapture:
-    return cv2.VideoCapture(index, backend)
+    with suppress_native_stderr():
+        return cv2.VideoCapture(index, backend)
 
 
 def configure_capture(capture: cv2.VideoCapture) -> None:
@@ -247,7 +327,8 @@ def try_open_camera(index: int) -> Tuple[Optional[cv2.VideoCapture], Optional[st
         frame = None
         ok = False
         for _ in range(6):
-            ok, frame = capture.read()
+            with suppress_native_stderr():
+                ok, frame = capture.read()
             if ok and frame is not None and frame_looks_usable(frame):
                 return capture, backend_name, backend_id
 
@@ -270,17 +351,24 @@ def list_available_cameras(
         alias = get_camera_alias(aliases, index, backend_id)
         capture.release()
         cameras.append((index, f"{alias} ({width}x{height})", backend_id, backend_name, alias))
+    cameras.sort(key=lambda item: (camera_priority(item[4], item[3]), item[0]))
     return cameras
 
 
 def select_camera(
     aliases: dict[tuple[int, str], str],
+    app_dir: Path,
     preferred_index: Optional[int] = None,
     preferred_backend: Optional[str] = None,
 ) -> Tuple[int, int, str, str]:
     cameras = list_available_cameras(aliases)
     if not cameras:
         raise RuntimeError("No se encontro ninguna camara disponible en Windows/OpenCV.")
+
+    remembered_index, remembered_backend = load_last_camera(app_dir)
+    if preferred_index is None and remembered_index is not None:
+        preferred_index = remembered_index
+        preferred_backend = remembered_backend
 
     if preferred_index is not None:
         for index, _label, backend_id, backend_name, alias in cameras:
@@ -586,6 +674,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     app_dir = Path(__file__).resolve().parent
+    silence_opencv_logs()
     session: Optional[SessionContext] = None
     session_report_path: Optional[Path] = None
     args = parse_args()
@@ -595,7 +684,10 @@ def main() -> None:
 
     try:
         session = initialize_session(app_dir)
-        camera_index, backend_id, backend_name, camera_alias = select_camera(camera_aliases, args.camera_index, args.backend)
+        camera_index, backend_id, backend_name, camera_alias = select_camera(
+            camera_aliases, app_dir, args.camera_index, args.backend
+        )
+        save_last_camera(app_dir, camera_index, backend_key_from_id(backend_id))
         session_report_path = run_capture_loop(camera_index, backend_id, backend_name, camera_alias, session)
     except KeyboardInterrupt:
         print("\nSesion interrumpida por teclado.")

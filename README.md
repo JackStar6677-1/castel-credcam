@@ -14,7 +14,10 @@ Revisa el archivo [LICENSE](LICENSE).
 
 - Pregunta si la sesion es `prueba` o `curso`
 - Permite elegir camara por indice, backend y alias legible
+- Recuerda la ultima camara usada para volver a abrirla automaticamente
 - Muestra preview en vivo con overlay compacto
+- Los overlays y guias son solo visuales: la foto guardada sale limpia
+- Usa por defecto un encuadre automatico tipo credencial vertical 3:4
 - Permite escribir el nombre del estudiante directamente en el preview
 - `Enter` confirma el nombre actual
 - `p` o `espacio` toman la foto
@@ -90,6 +93,7 @@ Incluye:
 - preview grande
 - selector de camara dentro del propio preview
 - opcion de voltear la imagen dentro del preview
+- encuadre automatico tipo credencial 3:4 centrado en el rostro cuando se detecta
 - escritura del nombre dentro de la misma interfaz
 - ayuda visual de rostro opcional
 - lista de capturas recientes
@@ -160,6 +164,7 @@ Si cambia el orden de las camaras en Windows, puedes editar ese archivo y cambia
    - `Enter` confirma el nombre actual
    - `p` toma y guarda la foto
    - `espacio` tambien toma la foto
+   - `x` activa o desactiva temporalmente el modo credencial automatico
    - `Enter` o `espacio` avanzan al siguiente estudiante en la revision
    - `r` borra la ultima captura y permite repetirla
    - `q` sale de la sesion
@@ -219,6 +224,16 @@ Las imagenes de prueba quedaran en:
 ```text
 camera_diagnostic\
 ```
+
+## Warnings de OpenCV
+
+La app intenta silenciar los warnings ruidosos de OpenCV al probar camaras y reduce las combinaciones inutiles que escanea.
+
+Ademas:
+
+- prioriza camaras virtuales utiles como Iriun, DroidCam e iVCam por encima de fuentes inestables
+- recuerda la ultima camara valida en un archivo local `last_camera.json`
+- no sube ese archivo al repo
 
 ## Apps de camara recomendadas
 
