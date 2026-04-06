@@ -6,6 +6,8 @@ iriun_diag_*.jpg
 *.pyo
 *.pyd
 .Python
+.env
+.env.*
 .venv/
 venv/
 env/
@@ -13,6 +15,10 @@ ENV/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.vscode/
+.idea/
+.DS_Store
 Thumbs.db
 Desktop.ini
+*.log
 last_camera.json
