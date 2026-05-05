@@ -25,6 +25,7 @@ Funciones principales:
 - puede cargar una lista de alumnos desde Excel o CSV y avanzar secuencialmente
 - crea una carpeta espejo `fotos_respaldo/` por curso con copia de cada foto y del `index.csv`
 - nombra cada archivo como `Nombre Alumno-Curso-RUT.jpg` cuando hay lista cargada
+- crea logs detallados de arranque, errores y cierre en `logs/`
 - recuerda la ultima camara valida usada
 - permite elegir backend y camara por indice
 - muestra preview en vivo con overlay informativo
@@ -56,6 +57,7 @@ CastelCredCam/
 |-- requirements.txt
 |-- run_castel_credcam.bat
 |-- run_castel_credcam_iriun.bat
+|-- logs/
 |-- README.md
 |-- LICENSE
 `-- GUI/
@@ -170,6 +172,18 @@ fotos_respaldo/
 Si cargas una lista de alumnos, la GUI completa `student_name` y `rut` automaticamente mientras avanza por el curso.
 Las fotos quedan con formato `Nombre Alumno-Curso-RUT.jpg`, usando el RUT sin guion. Si no hay RUT disponible, la app usa `SIN_RUT`.
 
+## Logs y diagnostico
+
+Cada arranque genera un archivo nuevo dentro de `logs/` con timestamp y PID. Ahí se guardan:
+
+- eventos de inicio y cierre
+- excepciones no controladas con traceback completo
+- errores de carga de roster, captura, backup o rehacer
+- contexto tecnico de la ejecucion, como version de Python y ruta de trabajo
+
+Si la GUI se congela o arroja un error inesperado, revisa el archivo mas reciente de `logs/gui_*.log`.
+Para ejecucion por consola, usa `logs/cli_*.log`.
+
 ## GUI incluida
 
 La carpeta `GUI/` contiene una variante con interfaz grafica mas elaborada.
@@ -217,6 +231,7 @@ El proyecto usa persistencia ligera:
 - `index.csv` por curso para registrar capturas
 
 `last_camera.json` es local y no se sube al repo.
+Los logs se guardan en `logs/` y tampoco se versionan.
 
 ## Seguridad y privacidad
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import logging
 import json
 import os
 import re
@@ -43,6 +44,40 @@ TEXT_THICKNESS = 1
 TEXT_LINE = 21
 CAMERA_ALIASES_FILENAME = "camera_aliases.json"
 LAST_CAMERA_FILENAME = "last_camera.json"
+LOGS_DIRNAME = "logs"
+
+
+def get_logs_dir(app_dir: Path) -> Path:
+    return app_dir / LOGS_DIRNAME
+
+
+def setup_logging(app_dir: Path, component: str) -> tuple[logging.Logger, Path]:
+    logs_dir = get_logs_dir(app_dir)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = logs_dir / f"{component}_{stamp}_{os.getpid()}.log"
+
+    logger = logging.getLogger(f"CastelCredCam.{component}")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+    logger.propagate = False
+
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    return logger, log_path
 
 
 @dataclass
@@ -736,6 +771,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     app_dir = Path(__file__).resolve().parent
     silence_opencv_logs()
+    logger, log_path = setup_logging(app_dir, "cli")
+    logger.info("=== CastelCredCam CLI start ===")
+    logger.info("Log file: %s", log_path)
+    logger.info("Python: %s", sys.version.replace("\n", " "))
+    logger.info("Executable: %s", sys.executable)
+    logger.info("CWD: %s", Path.cwd())
+    logger.info("Args: %s", sys.argv[1:])
     session: Optional[SessionContext] = None
     session_report_path: Optional[Path] = None
     args = parse_args()
@@ -745,24 +787,36 @@ def main() -> None:
 
     try:
         session = initialize_session(app_dir)
+        logger.info("Session initialized at %s", session.session_dir)
         camera_index, backend_id, backend_name, camera_alias = select_camera(
             camera_aliases, app_dir, args.camera_index, args.backend
+        )
+        logger.info(
+            "Selected camera index=%s backend=%s alias=%s",
+            camera_index,
+            backend_name,
+            camera_alias,
         )
         save_last_camera(app_dir, camera_index, backend_key_from_id(backend_id))
         session_report_path = run_capture_loop(camera_index, backend_id, backend_name, camera_alias, session)
     except KeyboardInterrupt:
+        logger.info("Session interrupted by keyboard.")
         print("\nSesion interrumpida por teclado.")
     except Exception as exc:
+        logger.exception("Unhandled exception in CLI run: %s", exc)
         print(f"\n[ERROR] {exc}")
         sys.exit(1)
 
     if session is not None:
+        logger.info("Session finished. records=%s csv=%s", len(session.records), session.csv_path)
         print("\nSesion finalizada.")
         print(f"Fotos: {session.session_dir}")
         print(f"CSV:   {session.csv_path}")
         if session_report_path is not None:
+            logger.info("Session report: %s", session_report_path)
             print(f"Reporte: {session_report_path}")
         print(f"Total en esta carpeta: {len(session.records)}")
+    logger.info("=== CastelCredCam CLI end ===")
 
 
 if __name__ == "__main__":

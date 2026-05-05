@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import logging
 import sys
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,7 @@ from castel_credcam import (  # noqa: E402
     build_photo_filename,
     configure_capture,
     ensure_photo_backup,
+    get_logs_dir,
     list_available_cameras,
     load_camera_aliases,
     load_existing_records,
@@ -37,6 +40,7 @@ from castel_credcam import (  # noqa: E402
     open_folder,
     rewrite_csv,
     sanitize_folder_name,
+    setup_logging,
     save_last_camera,
     silence_opencv_logs,
 )
@@ -143,7 +147,19 @@ class GuiSession:
 class CastelCredCamGUI:
     def __init__(self) -> None:
         silence_opencv_logs()
-        self.root = tk.Tk()
+        self.logger, self.log_path = setup_logging(APP_ROOT, "gui")
+        self.logger.info("=== CastelCredCam GUI start ===")
+        self.logger.info("Log file: %s", self.log_path)
+        self.logger.info("Logs dir: %s", get_logs_dir(APP_ROOT))
+        self.logger.info("Python: %s", sys.version.replace("\n", " "))
+        self.logger.info("Executable: %s", sys.executable)
+        self.logger.info("CWD: %s", Path.cwd())
+        self.logger.info("Args: %s", sys.argv[1:])
+        try:
+            self.root = tk.Tk()
+        except Exception as exc:
+            self.logger.exception("Failed to create Tk root window: %s", exc)
+            raise
         self.root.title(APP_TITLE)
         self.root.geometry("1500x920")
         self.root.minsize(1200, 760)
@@ -187,6 +203,7 @@ class CastelCredCamGUI:
         self.sidebar_subtitle_label: Optional[tk.Label] = None
         self.sidebar_title_label: Optional[ttk.Label] = None
         self._last_layout_size: tuple[int, int] = (0, 0)
+        self._responsive_job: Optional[str] = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
         self.mode_var = tk.StringVar(value="test")
@@ -214,8 +231,10 @@ class CastelCredCamGUI:
         self._configure_style()
         self._build_layout()
         self._load_camera_choices()
-        self.root.bind("<Configure>", self._sync_responsive_layout)
+        self.root.bind("<Configure>", self._schedule_responsive_layout)
         self.root.after_idle(self._sync_responsive_layout)
+        self.root.report_callback_exception = self._report_tk_exception
+        sys.excepthook = self._sys_excepthook
         self._bind_shortcuts()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -605,7 +624,16 @@ class CastelCredCamGUI:
         self.root.bind_all("<MouseWheel>", _on_mousewheel, add="+")
         self.root.bind_all("<Shift-MouseWheel>", _on_mousewheel, add="+")
 
+    def _schedule_responsive_layout(self, _event: Optional[tk.Event] = None) -> None:
+        if self._responsive_job is not None:
+            try:
+                self.root.after_cancel(self._responsive_job)
+            except Exception:
+                pass
+        self._responsive_job = self.root.after(120, self._sync_responsive_layout)
+
     def _sync_responsive_layout(self, _event: Optional[tk.Event] = None) -> None:
+        self._responsive_job = None
         if self.root is None:
             return
 
@@ -886,13 +914,16 @@ class CastelCredCamGUI:
             return
 
         path = Path(path_str)
+        self.logger.info("Import roster requested: %s", path)
         try:
             roster_map = self._load_roster_source(path)
         except Exception as exc:
+            self.logger.exception("Roster import failed: %s", exc)
             messagebox.showerror(APP_TITLE, f"No se pudo cargar la lista.\n\n{exc}")
             return
 
         if not roster_map:
+            self.logger.warning("Roster file contained no students: %s", path)
             messagebox.showwarning(APP_TITLE, "No encontré cursos con alumnos dentro del archivo seleccionado.")
             return
 
@@ -903,6 +934,7 @@ class CastelCredCamGUI:
         course_names = sorted(roster_map.keys(), key=_normalize_key)
         self.course_combo["values"] = course_names
         self.roster_path_var.set(f"Lista cargada: {path.name}")
+        self.logger.info("Roster loaded: %s courses=%s", path.name, len(roster_map))
 
         current_course = self.course_var.get().strip()
         resolved = self._resolve_roster_course(current_course) if current_course else ""
@@ -1530,6 +1562,7 @@ class CastelCredCamGUI:
 
     def start_session(self) -> None:
         mode = self.mode_var.get()
+        self.logger.info("Start session requested. mode=%s course=%s", mode, self.course_var.get().strip())
         photos_root = APP_ROOT / PHOTOS_DIRNAME
         photos_root.mkdir(parents=True, exist_ok=True)
         backup_root = APP_ROOT / BACKUP_PHOTOS_DIRNAME
@@ -1543,6 +1576,7 @@ class CastelCredCamGUI:
         else:
             course_display = self.course_var.get().strip()
             if not course_display:
+                self.logger.warning("Start session rejected: empty course in course mode.")
                 messagebox.showwarning(APP_TITLE, "Escribe el nombre del curso antes de iniciar.")
                 return
             course_slug = sanitize_folder_name(course_display)
@@ -1562,6 +1596,10 @@ class CastelCredCamGUI:
                 backup_dir = backup_course_dir(photos_root, course_slug)
                 self.course_var.set(course_display)
             elif len(self.roster_map) > 1:
+                self.logger.warning(
+                    "Start session blocked: multiple roster courses available and no match for %s",
+                    course_display,
+                )
                 messagebox.showwarning(APP_TITLE, "Elegiste modo curso, pero la lista cargada tiene varios cursos. Selecciona uno en el campo Curso.")
                 return
 
@@ -1594,18 +1632,29 @@ class CastelCredCamGUI:
         self._update_roster_session_label()
         self._refresh_course_view()
         self._refresh_recent()
+        self.logger.info(
+            "Session started. mode=%s course=%s session_dir=%s backup_dir=%s roster_students=%s",
+            mode,
+            course_display,
+            session_dir,
+            backup_dir,
+            len(roster_students),
+        )
         open_folder(photos_root)
 
     def capture_photo(self) -> None:
         if self.session is None:
+            self.logger.warning("Capture requested without active session.")
             messagebox.showinfo(APP_TITLE, "Primero inicia una sesion.")
             return
         if self.current_frame is None:
+            self.logger.warning("Capture requested without valid frame.")
             messagebox.showwarning(APP_TITLE, "Todavia no hay un frame valido de camara.")
             return
 
         roster_student = self.session.current_roster_student() if self.session.has_roster else None
         if self.session.has_roster and roster_student is None:
+            self.logger.info("Capture blocked: roster completed for %s", self.session.course_display)
             messagebox.showinfo(APP_TITLE, "La lista de alumnos ya se terminó.")
             return
         if roster_student is not None:
@@ -1613,6 +1662,7 @@ class CastelCredCamGUI:
         else:
             student_name = self.student_var.get().strip()
         if not student_name:
+            self.logger.warning("Capture blocked: empty student name. roster=%s", bool(roster_student))
             messagebox.showwarning(APP_TITLE, "Escribe el nombre del estudiante.")
             return
 
@@ -1631,6 +1681,7 @@ class CastelCredCamGUI:
         backup_path = self.session.backup_dir / filename
 
         if not cv2.imwrite(str(image_path), self.current_frame.copy()):
+            self.logger.error("Image save failed: %s", image_path)
             messagebox.showerror(APP_TITLE, f"No se pudo guardar la imagen en {image_path}")
             return
 
@@ -1648,6 +1699,7 @@ class CastelCredCamGUI:
             ensure_photo_backup(image_path, backup_path)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
         except Exception as exc:
+            self.logger.exception("Backup copy failed for %s: %s", filename, exc)
             backup_status = f"respaldo parcial: {exc}"
         self.session.records.append(record)
         if self.session.has_roster:
@@ -1659,9 +1711,19 @@ class CastelCredCamGUI:
         self._update_roster_session_label()
         self._refresh_course_view()
         self._refresh_recent()
+        self.logger.info(
+            "Capture saved. file=%s student=%s rut=%s course=%s records=%s backup=%s",
+            filename,
+            student_name,
+            student_rut,
+            self.session.course_display,
+            len(self.session.records),
+            backup_status,
+        )
 
     def retake_last(self) -> None:
         if self.session is None or not self.session.records:
+            self.logger.warning("Retake requested with no captures available.")
             messagebox.showinfo(APP_TITLE, "No hay capturas para rehacer.")
             return
 
@@ -1676,6 +1738,7 @@ class CastelCredCamGUI:
         try:
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
         except Exception:
+            self.logger.exception("Failed to refresh backup CSV after retake.")
             pass
         if self.session.has_roster:
             self.session.retreat_roster()
@@ -1686,12 +1749,14 @@ class CastelCredCamGUI:
         self._update_roster_session_label()
         self._refresh_course_view()
         self._refresh_recent()
+        self.logger.info("Retake completed. Removed=%s restored_student=%s", record.filename, record.student_name)
 
     def close_session(self) -> None:
         if self.session is None:
             return
         self.status_var.set(f"Sesion cerrada: {self.session.course_display}")
         self.session_var.set("Sesion no iniciada")
+        self.logger.info("Session closed. course=%s records=%s", self.session.course_display, len(self.session.records))
         self.session = None
         self.student_var.set("")
         self._refresh_student_card_mode()
@@ -1755,15 +1820,34 @@ class CastelCredCamGUI:
         if self.student_entry is not None and self.student_entry.winfo_ismapped():
             self.student_entry.focus_set()
 
+    def _report_tk_exception(self, exc_type, exc_value, exc_traceback) -> None:
+        self.logger.critical(
+            "Uncaught Tk exception: %s: %s",
+            exc_type.__name__ if hasattr(exc_type, "__name__") else exc_type,
+            exc_value,
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        messagebox.showerror(APP_TITLE, f"Ocurrió un error inesperado.\n\n{exc_value}")
+
+    def _sys_excepthook(self, exc_type, exc_value, exc_traceback) -> None:
+        self.logger.critical(
+            "Unhandled exception: %s: %s",
+            exc_type.__name__ if hasattr(exc_type, "__name__") else exc_type,
+            exc_value,
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+
     def _release_capture(self) -> None:
         if self.capture is not None:
             self.capture.release()
             self.capture = None
 
     def on_close(self) -> None:
+        self.logger.info("GUI close requested.")
         if self.preview_job is not None:
             self.root.after_cancel(self.preview_job)
         self._release_capture()
+        self.logger.info("=== CastelCredCam GUI end ===")
         self.root.destroy()
 
     def run(self) -> None:
