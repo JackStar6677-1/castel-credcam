@@ -4,6 +4,12 @@ CastelCredCam es una herramienta local en Python para tomar fotos tipo credencia
 
 El problema que intenta resolver es muy concreto: tener una app sencilla para abrir una camara, escribir el nombre del estudiante, capturar la foto y dejar todo guardado por curso sin depender de un flujo pesado de estudio fotografico ni de software complejo.
 
+Si estas retomando el proyecto despues de un tiempo, empieza por esta guia:
+
+- [Guia operativa y de soporte](docs/OPERACION.md)
+- [Logs y diagnostico](#logs-y-diagnostico)
+- [Estructura del repositorio](#estructura-del-repositorio)
+
 ## Objetivo del repositorio
 
 Este repo guarda el experimento completo de captura local, incluyendo:
@@ -32,6 +38,24 @@ Funciones principales:
 - deja la captura final limpia aunque el overlay se vea en pantalla
 - ofrece una etapa de revision inmediata para repetir la ultima foto si hace falta
 - genera un reporte de sesion al terminar
+
+## Como esta pensado el flujo
+
+La app se divide en dos capas:
+
+- `castel_credcam.py` es el flujo principal por consola, util para jornadas simples y para diagnosticar rapido
+- `GUI/castel_credcam_qt.py` es la interfaz principal de operacion, pensada para captura en curso real con roster, progreso y vista completa del curso
+
+La idea de diseno es esta:
+
+1. cargar una lista de alumnos cuando exista
+2. elegir el curso o trabajar en modo prueba
+3. seleccionar la camara disponible
+4. capturar en secuencia
+5. guardar la foto principal y su respaldo espejo
+6. dejar trazabilidad en CSV y en logs
+
+La GUI actual ya no depende de escribir cada alumno a mano si se carga una nomina.
 
 ## Casos de uso pensados
 
@@ -77,6 +101,8 @@ CastelCredCam/
   Variante legacy de Tkinter mantenida por compatibilidad interna.
 - `GUI/castel_credcam_qt.py`
   GUI principal nueva en PySide6, con panel lateral responsivo, preview en vivo, roster por curso y tabla de progreso.
+- `docs/OPERACION.md`
+  Guia de operacion, troubleshooting y estructura interna para cualquiera que herede el proyecto.
 - `run_castel_credcam.bat`
   Lanzador rapido del flujo principal.
 - `run_castel_credcam_iriun.bat`
@@ -143,6 +169,19 @@ run_castel_credcam_iriun.bat
 6. la GUI avanza automaticamente al siguiente alumno si hay roster cargado
 7. revisar rapidamente la foto o rehacer la ultima si hace falta
 
+### Si usas roster
+
+- la GUI completa `student_name`, `course` y `rut` desde la nomina
+- la tabla del curso marca `Hecho`, `Actual` y `Pendiente`
+- la captura se guarda con el formato `Nombre Alumno-Curso-RUT.jpg`
+- se guarda una copia espejo en `fotos_respaldo/<curso>/`
+
+### Si no usas roster
+
+- puedes seguir usando el campo manual de la sesion
+- la app mantiene el flujo clasico de captura
+- el nombre del archivo queda secuencial por curso
+
 ## Salida generada
 
 Durante una sesion, la app crea una estructura local parecida a esta:
@@ -174,6 +213,16 @@ fotos_respaldo/
 Si cargas una lista de alumnos, la GUI completa `student_name` y `rut` automaticamente mientras avanza por el curso.
 Las fotos quedan con formato `Nombre Alumno-Curso-RUT.jpg`, usando el RUT sin guion. Si no hay RUT disponible, la app usa `SIN_RUT`.
 
+### Regla de nombres
+
+La convencion actual prioriza recuperacion manual y orden:
+
+- nombre normalizado del alumno
+- curso
+- RUT sin guion
+
+Eso permite encontrar una foto rapidamente aunque se borre el CSV o se necesite rearmar una carpeta a mano.
+
 ## Logs y diagnostico
 
 Cada arranque genera un archivo nuevo dentro de `logs/` con timestamp y PID. Ahí se guardan:
@@ -185,6 +234,27 @@ Cada arranque genera un archivo nuevo dentro de `logs/` con timestamp y PID. Ah�
 
 Si la GUI se congela o arroja un error inesperado, revisa el archivo mas reciente de `logs/gui_*.log`.
 Para ejecucion por consola, usa `logs/cli_*.log`.
+
+### Que mirar primero si algo falla
+
+1. revisar el log mas reciente
+2. confirmar que la camara no este ocupada por otra app
+3. verificar que la nomina tenga el curso esperado
+4. comprobar que `fotos/` y `fotos_respaldo/` sigan existiendo
+5. probar `camera_diagnostic.py` para aislar el problema de hardware o backend
+
+### Fallas tipicas
+
+- `No responde` al entrar a `Curso`
+  Normalmente apunta a carga pesada de interfaz o a un render que quedo trabado. En la version Qt esto se fue corrigiendo con logging y con una construccion mas diferida de la vista.
+- `Sin señal de camara`
+  Suele significar que OpenCV abrio el dispositivo pero no recibio frames a tiempo, o que otro proceso tiene la camara tomada.
+- `camara en uso`
+  Cerrar la app anterior, esperar unos segundos y revisar el log. Si persiste, usar el diagnosticador para comprobar que el backend quede libre.
+- roster no carga
+  Verificar que el archivo sea `.xlsx` o `.csv`, que exista la columna de curso y que el nombre del curso coincida con el que elijas en la GUI.
+- foto guardada pero sin respaldo
+  Revisar permisos de escritura y el arbol `fotos_respaldo/<curso>/`.
 
 ## GUI incluida
 
@@ -202,6 +272,8 @@ Incluye:
 - archivos nombrados de forma legible para recuperación manual
 - logs detallados por arranque y error
 - flujo mas amigable para operadores no tecnicos
+- vista completa del curso con barra de progreso y estados
+- preview con overlay de ayuda para encuadre y seguimiento de rostro
 
 Ejecucion:
 
@@ -237,6 +309,26 @@ El proyecto usa persistencia ligera:
 `last_camera.json` es local y no se sube al repo.
 Los logs se guardan en `logs/` y tampoco se versionan.
 
+### Estructura local esperada
+
+En una jornada normal deberias terminar con algo similar a esto:
+
+```text
+CastelCredCam/
+|-- fotos/
+|   `-- 1 BASICO A/
+|       |-- Nombre Alumno-1 BASICO A-12345678.jpg
+|       |-- index.csv
+|       `-- session_YYYYMMDD_HHMMSS.txt
+|-- fotos_respaldo/
+|   `-- 1 BASICO A/
+|       |-- Nombre Alumno-1 BASICO A-12345678.jpg
+|       `-- index.csv
+`-- logs/
+    |-- gui_qt_YYYYMMDD_HHMMSS_PID.log
+    `-- cli_YYYYMMDD_HHMMSS_PID.log
+```
+
 ## Seguridad y privacidad
 
 Este punto es importante: el repo esta configurado para no subir datos sensibles de uso real.
@@ -253,6 +345,27 @@ Se ignoran por defecto:
 
 Eso permite tener el codigo publico sin publicar fotos de estudiantes ni salidas locales.
 
+## Mantenimiento para quien retome el proyecto
+
+Si una persona hereda este repo, este es el orden recomendado:
+
+1. leer `docs/OPERACION.md`
+2. revisar `README.md` completo
+3. instalar dependencias con `requirements.txt`
+4. ejecutar `camera_diagnostic.py`
+5. abrir la GUI con una carpeta de prueba
+6. revisar el log si algo falla
+
+Si se cambia la GUI, probar siempre:
+
+- carga de roster
+- avance anterior/siguiente
+- captura
+- rehacer ultima
+- cierre de camara
+- apertura de `Curso`
+- generacion de respaldo
+
 ## Licencia
 
 El repositorio se publica con licencia MIT. Revisa `LICENSE` para el texto completo.
@@ -260,6 +373,14 @@ El repositorio se publica con licencia MIT. Revisa `LICENSE` para el texto compl
 ## Estado del proyecto
 
 CastelCredCam es una herramienta practica y funcional, pero sigue siendo un experimento orientado a un flujo concreto. No intenta reemplazar suites fotograficas profesionales ni sistemas escolares completos.
+
+Hoy la ruta recomendada para uso real es:
+
+- `GUI/castel_credcam_qt.py` como interfaz principal
+- `castel_credcam.py` como flujo de respaldo por consola
+- `docs/OPERACION.md` como guia para operadores o personas que retomen el proyecto
+
+La GUI antigua de Tkinter se mantiene solo como referencia historica y no deberia tomarse como entrada principal de soporte.
 
 ## Posibles mejoras futuras
 
