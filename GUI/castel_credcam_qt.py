@@ -304,6 +304,14 @@ class CameraThread(QThread):
                     pass
                 self._capture = None
 
+    def stop(self) -> None:
+        self.requestInterruption()
+        if self._capture is not None:
+            try:
+                self._capture.release()
+            except Exception:
+                pass
+
 
 class CastelCredCamQt(QMainWindow):
     def __init__(self) -> None:
@@ -875,7 +883,10 @@ class CastelCredCamQt(QMainWindow):
         if not self.camera_choices:
             self._show_preview_message("No hay camara disponible.")
             return
-        self._stop_camera_thread()
+        if not self._stop_camera_thread():
+            self.logger.warning("Camera thread still shutting down; skip restart.")
+            self.status_label.setText("La camara sigue cerrando. Intenta de nuevo en unos segundos.")
+            return
         self._preview_frame_received = False
         self.camera_thread = CameraThread(self.camera_index, self.backend_id, self)
         self.camera_thread.frame_ready.connect(self._on_frame_ready)
@@ -887,16 +898,24 @@ class CastelCredCamQt(QMainWindow):
         self._show_preview_message("Esperando primer frame...")
         self.first_frame_timer.start(6000)
 
-    def _stop_camera_thread(self) -> None:
+    def _stop_camera_thread(self) -> bool:
         if self.camera_thread is None:
-            return
+            return True
         try:
-            self.camera_thread.requestInterruption()
-            self.camera_thread.wait(1500)
+            self.camera_thread.stop()
+            if not self.camera_thread.wait(5000):
+                self.logger.warning("Camera thread did not stop in time. index=%s backend=%s", self.camera_index, self.backend_name)
+                return False
         except Exception:
-            pass
+            self.logger.exception("Error while stopping camera thread.")
+            return False
+        finally:
+            if self.camera_thread is not None and not self.camera_thread.isRunning():
+                self.camera_thread = None
+                self.first_frame_timer.stop()
         self.camera_thread = None
         self.first_frame_timer.stop()
+        return True
 
     def _on_camera_message(self, message: str) -> None:
         self.logger.info("Camera: %s", message)
@@ -1414,6 +1433,12 @@ class CastelCredCamQt(QMainWindow):
         else:
             self.current_crop_box = None
             self.stable_crop_box = None
+
+        if for_preview:
+            if self.guide_check.isChecked():
+                self._draw_context_guides(output, transformed.shape[1], transformed.shape[0], crop_box, face_box)
+            if self.face_check.isChecked() and face_box is not None:
+                self._draw_face_anchor(output, crop_box, face_box)
 
         return output
 
