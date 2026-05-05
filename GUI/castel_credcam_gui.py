@@ -202,7 +202,9 @@ class CastelCredCamGUI:
         self.session_title_label: Optional[ttk.Label] = None
         self.sidebar_subtitle_label: Optional[tk.Label] = None
         self.sidebar_title_label: Optional[ttk.Label] = None
+        self.notebook: Optional[ttk.Notebook] = None
         self._last_layout_size: tuple[int, int] = (0, 0)
+        self._last_layout_profile: Optional[tuple[int, int]] = None
         self._responsive_job: Optional[str] = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
@@ -314,7 +316,9 @@ class CastelCredCamGUI:
         self._make_recent_card(sidebar_content)
 
         notebook = ttk.Notebook(right)
+        self.notebook = notebook
         notebook.grid(row=0, column=0, sticky="nsew")
+        notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
 
         capture_page = tk.Frame(notebook, bg=WINDOW_BG)
         self.capture_page = capture_page
@@ -624,6 +628,15 @@ class CastelCredCamGUI:
         self.root.bind_all("<MouseWheel>", _on_mousewheel, add="+")
         self.root.bind_all("<Shift-MouseWheel>", _on_mousewheel, add="+")
 
+    def _on_notebook_tab_changed(self, _event: Optional[tk.Event] = None) -> None:
+        if self.notebook is None:
+            return
+        try:
+            tab_name = self.notebook.tab(self.notebook.select(), "text")
+        except Exception:
+            tab_name = ""
+        self.logger.info("Notebook tab changed: %s", tab_name)
+
     def _schedule_responsive_layout(self, _event: Optional[tk.Event] = None) -> None:
         if self._responsive_job is not None:
             try:
@@ -641,19 +654,32 @@ class CastelCredCamGUI:
         height = max(0, self.root.winfo_height())
         if width <= 1 or height <= 1:
             return
-        if self._last_layout_size == (width, height):
+
+        if self.notebook is not None:
+            try:
+                current_tab = self.notebook.tab(self.notebook.select(), "text")
+            except Exception:
+                current_tab = ""
+            if current_tab == "Curso":
+                return
+
+        width_profile = 0 if width < 1300 else 1 if width < 1600 else 2
+        height_profile = 0 if height < 820 else 1 if height < 950 else 2
+        layout_profile = (width_profile, height_profile)
+        if self._last_layout_profile == layout_profile and self._last_layout_size == (width, height):
             return
+        self._last_layout_profile = layout_profile
         self._last_layout_size = (width, height)
 
-        sidebar_width = max(290, min(420, int(width * 0.28)))
+        sidebar_width = 300 if width_profile == 0 else 340 if width_profile == 1 else 380
         if self.left_shell is not None:
             self.left_shell.configure(width=sidebar_width)
 
-        title_size = 18 if width < 1300 else 20 if width < 1600 else 22
-        subtitle_size = 9 if width < 1300 else 10
-        session_size = 11 if width < 1300 else 13
-        info_size = 10 if width < 1300 else 11
-        tree_height = 11 if height < 820 else 14 if height < 950 else 16
+        title_size = 18 if width_profile == 0 else 20 if width_profile == 1 else 22
+        subtitle_size = 9 if width_profile == 0 else 10
+        session_size = 11 if width_profile == 0 else 13
+        info_size = 10 if width_profile == 0 else 11
+        tree_height = 11 if height_profile == 0 else 14 if height_profile == 1 else 16
 
         self.style.configure("Title.TLabel", font=("Segoe UI", title_size, "bold"))
         self.style.configure("Muted.TLabel", font=("Segoe UI", 8 if width < 1300 else 9))
