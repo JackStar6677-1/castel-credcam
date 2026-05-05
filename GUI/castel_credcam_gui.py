@@ -156,6 +156,9 @@ class CastelCredCamGUI:
         self.tk_image = None
         self.session: Optional[GuiSession] = None
         self.student_entry: Optional[ttk.Entry] = None
+        self.student_manual_frame: Optional[tk.Frame] = None
+        self.student_clear_button: Optional[ttk.Button] = None
+        self.student_card_title_var: Optional[tk.StringVar] = None
         self.current_face_box: Optional[tuple[int, int, int, int]] = None
         self.current_crop_box: Optional[tuple[int, int, int, int]] = None
         self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
@@ -176,6 +179,7 @@ class CastelCredCamGUI:
         self.recent_var = tk.StringVar(value="Sin capturas aun.")
         self.roster_map: dict[str, list[RosterStudent]] = {}
         self.roster_lookup: dict[str, str] = {}
+        self.roster_preview_index: dict[str, int] = {}
 
         self.face_guide_var = tk.BooleanVar(value=True)
         self.frame_guide_var = tk.BooleanVar(value=True)
@@ -355,9 +359,11 @@ class CastelCredCamGUI:
     def _make_card(self, parent: tk.Widget, title: str) -> ttk.Frame:
         card = ttk.Frame(parent, style="Card.TFrame")
         card.pack(fill="x", padx=16, pady=8)
-        tk.Label(card, text=title, bg=CARD_BG, fg=ACCENT_GOLD, font=("Segoe UI", 11, "bold")).pack(
+        title_label = tk.Label(card, text=title, bg=CARD_BG, fg=ACCENT_GOLD, font=("Segoe UI", 11, "bold"))
+        title_label.pack(
             anchor="w", padx=14, pady=(12, 8)
         )
+        card.title_label = title_label  # type: ignore[attr-defined]
         return card
 
     def _make_session_card(self, parent: tk.Widget) -> None:
@@ -415,16 +421,22 @@ class CastelCredCamGUI:
 
     def _make_student_card(self, parent: tk.Widget) -> None:
         card = self._make_card(parent, "Estudiante y captura")
-        ttk.Label(card, text="Nombre actual", style="Muted.TLabel").pack(anchor="w", padx=14, pady=(0, 2))
-        self.student_entry = ttk.Entry(card, textvariable=self.student_var)
-        self.student_entry.pack(fill="x", padx=14, pady=(0, 10))
+        self.student_card_title_var = tk.StringVar(value="Estudiante y captura")
+        card.title_label.configure(textvariable=self.student_card_title_var)  # type: ignore[attr-defined]
+
+        self.student_manual_frame = tk.Frame(card, bg=CARD_BG)
+        self.student_manual_frame.pack(fill="x", padx=14, pady=(0, 10))
+        ttk.Label(self.student_manual_frame, text="Nombre actual", style="Muted.TLabel").pack(anchor="w", pady=(0, 2))
+        self.student_entry = ttk.Entry(self.student_manual_frame, textvariable=self.student_var)
+        self.student_entry.pack(fill="x")
         self.student_entry.bind("<Return>", self._handle_student_return)
         self.student_entry.bind("<KP_Enter>", self._handle_student_return)
 
         buttons = tk.Frame(card, bg=CARD_BG)
         buttons.pack(fill="x", padx=14, pady=(0, 6))
         ttk.Button(buttons, text="Capturar", style="Accent.TButton", command=self.capture_photo).pack(side="left", fill="x", expand=True)
-        ttk.Button(buttons, text="Limpiar", style="Gold.TButton", command=lambda: self.student_var.set("")).pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.student_clear_button = ttk.Button(buttons, text="Limpiar", style="Gold.TButton", command=lambda: self.student_var.set(""))
+        self.student_clear_button.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
         buttons2 = tk.Frame(card, bg=CARD_BG)
         buttons2.pack(fill="x", padx=14, pady=(0, 14))
@@ -670,6 +682,8 @@ class CastelCredCamGUI:
 
         self.roster_map = roster_map
         self.roster_lookup = {_normalize_key(course): course for course in roster_map}
+        for course_name in roster_map:
+            self.roster_preview_index.setdefault(course_name, 0)
         course_names = sorted(roster_map.keys(), key=_normalize_key)
         self.course_combo["values"] = course_names
         self.roster_path_var.set(f"Lista cargada: {path.name}")
@@ -709,13 +723,17 @@ class CastelCredCamGUI:
             return
 
         students = self.roster_map.get(resolved, [])
-        next_student = students[0] if students else None
-        if next_student is None:
+        if not students:
             self.roster_status_var.set(f"{resolved}\nSin alumnos cargados.")
             return
 
+        preview_index = self.roster_preview_index.get(resolved, 0)
+        preview_index = max(0, min(preview_index, len(students) - 1))
+        self.roster_preview_index[resolved] = preview_index
+        next_student = students[preview_index]
+
         self.roster_status_var.set(
-            f"{resolved}\nAlumno 1 de {len(students)}\nSiguiente: {next_student.display_name}\nRUT: {next_student.rut}"
+            f"{resolved}\nAlumno {preview_index + 1} de {len(students)}\nSiguiente: {next_student.display_name}\nRUT: {next_student.rut}"
         )
 
     def _sync_session_student_from_roster(self) -> None:
@@ -725,9 +743,32 @@ class CastelCredCamGUI:
         if student is None:
             self.student_var.set("")
             self._update_roster_session_label()
+            self._refresh_student_card_mode()
             return
         self.student_var.set(student.display_name)
         self._update_roster_session_label()
+        self._refresh_student_card_mode()
+
+    def _refresh_student_card_mode(self) -> None:
+        manual_mode = self.session is None or not self.session.has_roster
+        if self.student_card_title_var is not None:
+            self.student_card_title_var.set("Estudiante y captura" if manual_mode else "Captura")
+        if self.student_manual_frame is not None:
+            if manual_mode:
+                if not self.student_manual_frame.winfo_ismapped():
+                    self.student_manual_frame.pack(fill="x", padx=14, pady=(0, 10))
+            else:
+                self.student_manual_frame.pack_forget()
+        if self.student_clear_button is not None:
+            if manual_mode:
+                if not self.student_clear_button.winfo_ismapped():
+                    self.student_clear_button.pack(side="left", fill="x", expand=True, padx=(8, 0))
+            else:
+                self.student_clear_button.pack_forget()
+        if self.student_entry is not None and not manual_mode:
+            self.student_entry.state(["disabled"])
+        elif self.student_entry is not None:
+            self.student_entry.state(["!disabled"])
 
     def _update_roster_session_label(self) -> None:
         if self.session is None or not self.session.has_roster:
@@ -742,25 +783,62 @@ class CastelCredCamGUI:
         )
 
     def next_roster_student(self) -> None:
-        if self.session is None or not self.session.has_roster:
+        if self.session is not None and self.session.has_roster:
+            self.session.advance_roster()
+            self._sync_session_student_from_roster()
+            self.status_var.set("Siguiente alumno.")
             return
-        self.session.advance_roster()
-        self._sync_session_student_from_roster()
-        self.status_var.set("Siguiente alumno.")
+
+        course_name = self._resolve_roster_course(self.course_var.get().strip())
+        if not course_name and len(self.roster_map) == 1:
+            course_name = next(iter(self.roster_map))
+        if not course_name:
+            return
+        students = self.roster_map.get(course_name, [])
+        if not students:
+            return
+        current_index = self.roster_preview_index.get(course_name, 0)
+        current_index = min(current_index + 1, len(students) - 1)
+        self.roster_preview_index[course_name] = current_index
+        self._update_roster_preview(course_name)
+        self.status_var.set(f"Vista previa en {current_index + 1} de {len(students)}.")
 
     def prev_roster_student(self) -> None:
-        if self.session is None or not self.session.has_roster:
+        if self.session is not None and self.session.has_roster:
+            self.session.retreat_roster()
+            self._sync_session_student_from_roster()
+            self.status_var.set("Alumno anterior.")
             return
-        self.session.retreat_roster()
-        self._sync_session_student_from_roster()
-        self.status_var.set("Alumno anterior.")
+
+        course_name = self._resolve_roster_course(self.course_var.get().strip())
+        if not course_name and len(self.roster_map) == 1:
+            course_name = next(iter(self.roster_map))
+        if not course_name:
+            return
+        students = self.roster_map.get(course_name, [])
+        if not students:
+            return
+        current_index = self.roster_preview_index.get(course_name, 0)
+        current_index = max(0, current_index - 1)
+        self.roster_preview_index[course_name] = current_index
+        self._update_roster_preview(course_name)
+        self.status_var.set(f"Vista previa en {current_index + 1} de {len(students)}.")
 
     def sync_student_with_roster(self) -> None:
-        if self.session is None or not self.session.has_roster:
-            messagebox.showinfo(APP_TITLE, "Primero inicia una sesion con una lista cargada.")
+        if self.session is not None and self.session.has_roster:
+            self._sync_session_student_from_roster()
+            self.status_var.set("Alumno alineado con la lista.")
             return
-        self._sync_session_student_from_roster()
-        self.status_var.set("Alumno alineado con la lista.")
+
+        course_name = self._resolve_roster_course(self.course_var.get().strip())
+        if not course_name and len(self.roster_map) == 1:
+            course_name = next(iter(self.roster_map))
+        if not course_name:
+            messagebox.showinfo(APP_TITLE, "Carga una lista y elige un curso primero.")
+            return
+        self.roster_preview_index[course_name] = 0
+        self._update_roster_preview(course_name)
+        self.status_var.set("Vista previa alineada con el primer alumno.")
 
     def _handle_student_return(self, _event=None):
         self.capture_photo()
@@ -1193,7 +1271,10 @@ class CastelCredCamGUI:
         )
         self.session_var.set(f"Sesion activa: {course_display} | Carpeta: {session_dir.name}")
         self.status_var.set(f"Sesion iniciada en {session_dir}")
+        if roster_students:
+            self.session.roster_index = self.roster_preview_index.get(course_display, 0)
         self._sync_session_student_from_roster()
+        self._refresh_student_card_mode()
         self._update_roster_session_label()
         self._refresh_recent()
         open_folder(photos_root)
@@ -1206,17 +1287,14 @@ class CastelCredCamGUI:
             messagebox.showwarning(APP_TITLE, "Todavia no hay un frame valido de camara.")
             return
 
-        typed_name = self.student_var.get().strip()
         roster_student = self.session.current_roster_student() if self.session.has_roster else None
         if self.session.has_roster and roster_student is None:
             messagebox.showinfo(APP_TITLE, "La lista de alumnos ya se terminó.")
             return
-        if roster_student is not None and typed_name:
-            student_name = typed_name
-        elif roster_student is not None:
+        if roster_student is not None:
             student_name = roster_student.display_name
         else:
-            student_name = typed_name
+            student_name = self.student_var.get().strip()
         if not student_name:
             messagebox.showwarning(APP_TITLE, "Escribe el nombre del estudiante.")
             return
@@ -1297,6 +1375,7 @@ class CastelCredCamGUI:
         self.session_var.set("Sesion no iniciada")
         self.session = None
         self.student_var.set("")
+        self._refresh_student_card_mode()
         self._update_roster_preview(self.course_var.get())
         self._refresh_recent()
 
@@ -1353,7 +1432,7 @@ class CastelCredCamGUI:
         self.status_var.set(f"Recorte automatico {'activado' if self.crop_portrait_var.get() else 'desactivado'}")
 
     def _focus_student(self) -> None:
-        if self.student_entry is not None:
+        if self.student_entry is not None and self.student_entry.winfo_ismapped():
             self.student_entry.focus_set()
 
     def _release_capture(self) -> None:
