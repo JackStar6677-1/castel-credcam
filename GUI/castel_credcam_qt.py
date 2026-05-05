@@ -318,6 +318,8 @@ class CastelCredCamQt(QMainWindow):
         self.latest_frame: Optional[np.ndarray] = None
         self.frame_counter = 0
         self.current_face_box: Optional[tuple[int, int, int, int]] = None
+        self.current_crop_box: Optional[tuple[int, int, int, int]] = None
+        self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         self.session: Optional[SessionState] = None
         self.roster_map: dict[str, list[RosterStudent]] = {}
@@ -1379,16 +1381,194 @@ class CastelCredCamQt(QMainWindow):
         if self.mirror_check.isChecked():
             transformed = cv2.flip(transformed, 1)
         transformed = _rotate_frame(transformed, self.rotation_combo.currentText())
+        detect_face = self.face_check.isChecked() or self.crop_check.isChecked()
+        face_box = self._detect_primary_face(transformed) if detect_face else None
+        self.current_face_box = face_box
+
+        output = transformed
+        crop_box: Optional[tuple[int, int, int, int]] = None
         if self.crop_check.isChecked():
-            transformed = _center_crop_to_aspect(transformed, 3 / 4)
-        if for_preview and self.guide_check.isChecked():
-            self._draw_guides(transformed)
-        if for_preview and self.face_check.isChecked():
-            face = self._detect_primary_face(transformed)
-            if face is not None:
-                x, y, w, h = face
-                cv2.rectangle(transformed, (x, y), (x + w, y + h), (0, 255, 255), 2)
-        return transformed
+            crop_box = self._compute_portrait_crop_box(transformed.shape[1], transformed.shape[0], face_box)
+            crop_box = self._smooth_crop_box(crop_box)
+            self.current_crop_box = crop_box
+            output = self._crop_frame_with_box(transformed, crop_box, output_size=(900, 1200))
+        else:
+            self.current_crop_box = None
+            self.stable_crop_box = None
+
+        if for_preview:
+            if self.guide_check.isChecked():
+                self._draw_context_guides(output, transformed.shape[1], transformed.shape[0], crop_box, face_box)
+            if self.face_check.isChecked() and face_box is not None:
+                self._draw_face_anchor(output, transformed.shape[1], transformed.shape[0], crop_box, face_box)
+
+        return output
+
+    def _compute_portrait_crop_box(
+        self,
+        width: int,
+        height: int,
+        face_box: Optional[tuple[int, int, int, int]],
+    ) -> tuple[int, int, int, int]:
+        target_ratio = 3 / 4
+        max_crop_h = min(height, int(width / target_ratio))
+        max_crop_w = int(max_crop_h * target_ratio)
+
+        if face_box is not None:
+            fx, fy, fw, fh = face_box
+            face_cx = fx + fw / 2
+            face_cy = fy + fh / 2
+            crop_h = max(int(fh * 2.45), int(height * 0.58))
+            crop_h = min(crop_h, max_crop_h)
+            crop_w = int(crop_h * target_ratio)
+            x1 = int(face_cx - crop_w / 2)
+            y1 = int(face_cy - crop_h * 0.36)
+        else:
+            crop_h = int(max_crop_h * 0.9)
+            crop_h = max(240, crop_h)
+            crop_w = int(crop_h * target_ratio)
+            x1 = (width - crop_w) // 2
+            y1 = (height - crop_h) // 2
+
+        crop_w = min(crop_w, max_crop_w)
+        crop_h = min(crop_h, height)
+        x1 = max(0, min(x1, width - crop_w))
+        y1 = max(0, min(y1, height - crop_h))
+        return x1, y1, x1 + crop_w, y1 + crop_h
+
+    def _smooth_crop_box(self, next_box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        if self.stable_crop_box is None:
+            self.stable_crop_box = next_box
+            return next_box
+
+        prev_x1, prev_y1, prev_x2, prev_y2 = self.stable_crop_box
+        next_x1, next_y1, next_x2, next_y2 = next_box
+        prev_w = prev_x2 - prev_x1
+        prev_h = prev_y2 - prev_y1
+        next_w = next_x2 - next_x1
+        next_h = next_y2 - next_y1
+
+        move_threshold_x = max(10, int(prev_w * 0.06))
+        move_threshold_y = max(10, int(prev_h * 0.06))
+        size_threshold_w = max(12, int(prev_w * 0.08))
+        size_threshold_h = max(12, int(prev_h * 0.08))
+
+        if (
+            abs(next_x1 - prev_x1) < move_threshold_x
+            and abs(next_y1 - prev_y1) < move_threshold_y
+            and abs(next_w - prev_w) < size_threshold_w
+            and abs(next_h - prev_h) < size_threshold_h
+        ):
+            return self.stable_crop_box
+
+        alpha = 0.12
+        prev_cx = (prev_x1 + prev_x2) / 2
+        prev_cy = (prev_y1 + prev_y2) / 2
+        next_cx = (next_x1 + next_x2) / 2
+        next_cy = (next_y1 + next_y2) / 2
+
+        blended_cx = prev_cx + (next_cx - prev_cx) * alpha
+        blended_cy = prev_cy + (next_cy - prev_cy) * alpha
+        blended_h = max(240, prev_h + (next_h - prev_h) * alpha)
+        blended_w = blended_h * (3 / 4)
+
+        x1 = int(blended_cx - blended_w / 2)
+        y1 = int(blended_cy - blended_h / 2)
+        x2 = int(x1 + blended_w)
+        y2 = int(y1 + blended_h)
+        self.stable_crop_box = (x1, y1, x2, y2)
+        return self.stable_crop_box
+
+    def _crop_frame_with_box(
+        self,
+        frame: np.ndarray,
+        crop_box: tuple[int, int, int, int],
+        output_size: tuple[int, int] = (900, 1200),
+    ) -> np.ndarray:
+        x1, y1, x2, y2 = crop_box
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return frame
+        return cv2.resize(crop, output_size, interpolation=cv2.INTER_CUBIC)
+
+    def _draw_context_guides(
+        self,
+        frame: np.ndarray,
+        source_width: int,
+        source_height: int,
+        crop_box: Optional[tuple[int, int, int, int]],
+        face_box: Optional[tuple[int, int, int, int]],
+    ) -> None:
+        height, width = frame.shape[:2]
+        if crop_box is not None:
+            x1, y1, x2, y2 = crop_box
+            scale_x = width / max(1, x2 - x1)
+            scale_y = height / max(1, y2 - y1)
+            cv2.rectangle(frame, (6, 6), (width - 7, height - 7), (93, 201, 244), 2)
+            cv2.line(frame, (width // 2, 6), (width // 2, height - 7), (93, 201, 244), 1)
+            cv2.line(frame, (6, int(height * 0.38)), (width - 7, int(height * 0.38)), (93, 201, 244), 1)
+            cv2.putText(
+                frame,
+                "Rostro sigue al recorte",
+                (12, max(28, int(height * 0.08))),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.52,
+                (93, 201, 244),
+                1,
+                cv2.LINE_AA,
+            )
+            if face_box is not None:
+                fx, fy, fw, fh = face_box
+                rel_x1 = int((fx - x1) * scale_x)
+                rel_y1 = int((fy - y1) * scale_y)
+                rel_x2 = int((fx + fw - x1) * scale_x)
+                rel_y2 = int((fy + fh - y1) * scale_y)
+                if rel_x2 > 0 and rel_y2 > 0 and rel_x1 < width and rel_y1 < height:
+                    cv2.rectangle(
+                        frame,
+                        (max(0, rel_x1), max(0, rel_y1)),
+                        (min(width - 1, rel_x2), min(height - 1, rel_y2)),
+                        (244, 201, 93),
+                        2,
+                    )
+        else:
+            self._draw_guides(frame)
+
+    def _draw_face_anchor(
+        self,
+        frame: np.ndarray,
+        source_width: int,
+        source_height: int,
+        crop_box: Optional[tuple[int, int, int, int]],
+        face_box: tuple[int, int, int, int],
+    ) -> None:
+        if crop_box is None:
+            x, y, w, h = face_box
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (244, 201, 93), 2)
+            cv2.putText(frame, "Rostro", (x, max(24, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (244, 201, 93), 1, cv2.LINE_AA)
+            return
+
+        x1, y1, x2, y2 = crop_box
+        out_w = frame.shape[1]
+        out_h = frame.shape[0]
+        scale_x = out_w / max(1, x2 - x1)
+        scale_y = out_h / max(1, y2 - y1)
+        fx, fy, fw, fh = face_box
+        rel_x1 = int((fx - x1) * scale_x)
+        rel_y1 = int((fy - y1) * scale_y)
+        rel_x2 = int((fx + fw - x1) * scale_x)
+        rel_y2 = int((fy + fh - y1) * scale_y)
+        cv2.rectangle(frame, (max(0, rel_x1), max(0, rel_y1)), (min(out_w - 1, rel_x2), min(out_h - 1, rel_y2)), (244, 201, 93), 2)
+        cv2.putText(
+            frame,
+            "Rostro",
+            (max(8, rel_x1), max(28, rel_y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (244, 201, 93),
+            1,
+            cv2.LINE_AA,
+        )
 
     def _draw_guides(self, frame: np.ndarray) -> None:
         height, width = frame.shape[:2]
