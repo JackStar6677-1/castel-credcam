@@ -9,7 +9,7 @@ El problema que intenta resolver es muy concreto: tener una app sencilla para ab
 Este repo guarda el experimento completo de captura local, incluyendo:
 
 - una version principal por consola con preview de OpenCV
-- una version GUI en Tkinter con mas controles
+- una version GUI en PySide6 con mas controles
 - scripts de arranque para flujos comunes
 - archivos de configuracion local para aliases de camaras
 - utilidades de diagnostico
@@ -44,7 +44,7 @@ Funciones principales:
 
 - Python
 - OpenCV para captura y preview
-- Tkinter para la GUI incluida en `GUI/`
+- PySide6 para la GUI incluida en `GUI/`
 - archivos CSV y JSON para persistencia local ligera
 
 ## Estructura del repositorio
@@ -61,7 +61,7 @@ CastelCredCam/
 |-- README.md
 |-- LICENSE
 `-- GUI/
-    |-- castel_credcam_gui.py
+    |-- castel_credcam_qt.py
     `-- run_castel_credcam_gui.bat
 ```
 
@@ -74,7 +74,9 @@ CastelCredCam/
 - `camera_diagnostic.py`
   Script para revisar que camaras detecta OpenCV y generar una salida de diagnostico local.
 - `GUI/castel_credcam_gui.py`
-  Variante con interfaz grafica mas completa para operar sin depender tanto de teclado en consola.
+  Variante legacy de Tkinter mantenida por compatibilidad interna.
+- `GUI/castel_credcam_qt.py`
+  GUI principal nueva en PySide6, con panel lateral responsivo, preview en vivo, roster por curso y tabla de progreso.
 - `run_castel_credcam.bat`
   Lanzador rapido del flujo principal.
 - `run_castel_credcam_iriun.bat`
@@ -192,18 +194,20 @@ Incluye:
 
 - preview grande
 - controles mas visibles
-- panel lateral de acciones
+- panel lateral de acciones con scroll
 - lista de capturas recientes
 - carga de roster de alumnos para captura secuencial con nombre y RUT
+- vista completa del curso con estados `Hecho`, `Actual` y `Pendiente`
 - respaldo espejo por curso en `fotos_respaldo/`
 - archivos nombrados de forma legible para recuperación manual
+- logs detallados por arranque y error
 - flujo mas amigable para operadores no tecnicos
 
 Ejecucion:
 
 ```powershell
 cd C:\Users\Jack\Documents\GitHub\Experimentos\CastelCredCam\GUI
-py .\castel_credcam_gui.py
+py .\castel_credcam_qt.py
 ```
 
 O con:
