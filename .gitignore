@@ -1,5 +1,6 @@
 __pycache__/
 fotos/
+fotos_respaldo/
 camera_diagnostic/
 iriun_diag_*.jpg
 *.pyc

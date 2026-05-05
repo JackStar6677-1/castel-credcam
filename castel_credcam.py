@@ -6,6 +6,8 @@ import json
 import os
 import re
 import sys
+import unicodedata
+import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +21,7 @@ import numpy as np
 APP_TITLE = "CastelCredCam"
 WINDOW_NAME = "CastelCredCam Preview"
 PHOTOS_DIRNAME = "fotos"
+BACKUP_PHOTOS_DIRNAME = "fotos_respaldo"
 TEST_FOLDER_NAME = "_pruebas"
 CSV_FILENAME = "index.csv"
 MAX_CAMERA_INDEX = 8
@@ -49,6 +52,7 @@ class PhotoRecord:
     student_name: str
     course: str
     timestamp: str
+    rut: str = ""
 
 
 @dataclass
@@ -57,7 +61,9 @@ class SessionContext:
     course_display: str
     course_slug: str
     photos_root: Path
+    backup_root: Path
     session_dir: Path
+    backup_dir: Path
     csv_path: Path
     records: List[PhotoRecord]
     session_started_at: datetime
@@ -182,6 +188,36 @@ def sanitize_folder_name(value: str) -> str:
     return cleaned or "Curso"
 
 
+def sanitize_file_component(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value).strip())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.replace("/", "-").replace("\\", "-")
+    text = re.sub(r"-{2,}", "-", text)
+    return text or "sin_nombre"
+
+
+def rut_no_hyphen(rut: str) -> str:
+    return re.sub(r"[^0-9Kk]", "", str(rut).strip()).upper()
+
+
+def build_photo_filename(student_name: str, course: str, rut: str) -> str:
+    safe_name = sanitize_file_component(student_name)
+    safe_course = sanitize_file_component(course)
+    safe_rut = rut_no_hyphen(rut) or "SIN_RUT"
+    return f"{safe_name}-{safe_course}-{safe_rut}.jpg"
+
+
+def backup_course_dir(photos_root: Path, course_slug: str) -> Path:
+    return photos_root.parent / BACKUP_PHOTOS_DIRNAME / course_slug
+
+
+def ensure_photo_backup(source_path: Path, backup_path: Path) -> None:
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, backup_path)
+
+
 def ask_mode() -> str:
     while True:
         print("\nSelecciona el modo de trabajo:")
@@ -211,6 +247,7 @@ def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
                         student_name=row["student_name"],
                         course=row["course"],
                         timestamp=row["timestamp"],
+                        rut=row.get("rut", ""),
                     )
                 )
             except (KeyError, TypeError, ValueError):
@@ -224,33 +261,36 @@ def ensure_csv_exists(csv_path: Path) -> None:
         return
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["id", "filename", "student_name", "course", "timestamp"])
+        writer.writerow(["id", "filename", "student_name", "course", "rut", "timestamp"])
 
 
 def append_csv_record(csv_path: Path, record: PhotoRecord) -> None:
     ensure_csv_exists(csv_path)
     with csv_path.open("a", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow([record.id, record.filename, record.student_name, record.course, record.timestamp])
+        writer.writerow([record.id, record.filename, record.student_name, record.course, record.rut, record.timestamp])
 
 
 def rewrite_csv(csv_path: Path, records: List[PhotoRecord]) -> None:
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["id", "filename", "student_name", "course", "timestamp"])
+        writer.writerow(["id", "filename", "student_name", "course", "rut", "timestamp"])
         for record in records:
-            writer.writerow([record.id, record.filename, record.student_name, record.course, record.timestamp])
+            writer.writerow([record.id, record.filename, record.student_name, record.course, record.rut, record.timestamp])
 
 
 def initialize_session(app_dir: Path) -> SessionContext:
     mode = ask_mode()
     photos_root = app_dir / PHOTOS_DIRNAME
     photos_root.mkdir(parents=True, exist_ok=True)
+    backup_root = app_dir / BACKUP_PHOTOS_DIRNAME
+    backup_root.mkdir(parents=True, exist_ok=True)
 
     if mode == "test":
         course_display = "PRUEBA"
         course_slug = "PRUEBA"
         session_dir = photos_root / TEST_FOLDER_NAME
+        backup_dir = backup_root / TEST_FOLDER_NAME
     else:
         while True:
             course_input = input("Nombre del curso: ").strip()
@@ -260,10 +300,16 @@ def initialize_session(app_dir: Path) -> SessionContext:
         course_display = course_input
         course_slug = sanitize_folder_name(course_input)
         session_dir = photos_root / course_slug
+        backup_dir = backup_root / course_slug
 
     session_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
     csv_path = session_dir / CSV_FILENAME
     ensure_csv_exists(csv_path)
+    try:
+        shutil.copy2(csv_path, backup_dir / CSV_FILENAME)
+    except Exception:
+        pass
     records = load_existing_records(csv_path)
 
     print("\nSesion lista:")
@@ -278,7 +324,9 @@ def initialize_session(app_dir: Path) -> SessionContext:
         course_display=course_display,
         course_slug=course_slug,
         photos_root=photos_root,
+        backup_root=backup_root,
         session_dir=session_dir,
+        backup_dir=backup_dir,
         csv_path=csv_path,
         records=records,
         session_started_at=datetime.now(),
@@ -479,13 +527,20 @@ def remove_last_record(session: SessionContext) -> Optional[PhotoRecord]:
     image_path = session.session_dir / last_record.filename
     if image_path.exists():
         image_path.unlink()
+    backup_image_path = session.backup_dir / last_record.filename
+    if backup_image_path.exists():
+        backup_image_path.unlink()
     rewrite_csv(session.csv_path, session.records)
+    try:
+        shutil.copy2(session.csv_path, session.backup_dir / CSV_FILENAME)
+    except Exception:
+        pass
     return last_record
 
 
 def build_record(session: SessionContext, student_name: str) -> PhotoRecord:
     photo_id = session.next_id
-    filename = session.filename_for(photo_id)
+    filename = build_photo_filename(student_name, session.course_display, "")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return PhotoRecord(
         id=photo_id,
@@ -581,8 +636,14 @@ def capture_photo(
 
         record = build_record(session, student_name)
         image_path = session.session_dir / record.filename
+        backup_path = session.backup_dir / record.filename
         save_image(frame, image_path)
         append_csv_record(session.csv_path, record)
+        try:
+            shutil.copy2(image_path, backup_path)
+            shutil.copy2(session.csv_path, session.backup_dir / CSV_FILENAME)
+        except Exception:
+            pass
         session.records.append(record)
 
         action = show_post_capture_review(session, frame, record, camera_label)

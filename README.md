@@ -22,6 +22,9 @@ Funciones principales:
 - crea y organiza carpetas por curso
 - guarda las capturas numeradas automaticamente
 - mantiene un `index.csv` con metadatos de cada foto
+- puede cargar una lista de alumnos desde Excel o CSV y avanzar secuencialmente
+- crea una carpeta espejo `fotos_respaldo/` por curso con copia de cada foto y del `index.csv`
+- nombra cada archivo como `Nombre Alumno-Curso-RUT.jpg` cuando hay lista cargada
 - recuerda la ultima camara valida usada
 - permite elegir backend y camara por indice
 - muestra preview en vivo con overlay informativo
@@ -129,12 +132,12 @@ run_castel_credcam_iriun.bat
 ## Flujo de una sesion
 
 1. elegir modo `prueba` o `curso`
-2. si corresponde, escribir el nombre del curso
-3. seleccionar camara y backend
-4. escribir el nombre del estudiante en el preview
-5. capturar
-6. revisar rapidamente la foto
-7. continuar o rehacer
+2. si vas a trabajar con roster, cargar el Excel o CSV de alumnos
+3. elegir el curso en el campo correspondiente
+4. seleccionar camara y backend
+5. capturar con Enter
+6. la GUI avanza automaticamente al siguiente alumno si hay roster cargado
+7. revisar rapidamente la foto o rehacer la ultima si hace falta
 
 ## Salida generada
 
@@ -143,10 +146,16 @@ Durante una sesion, la app crea una estructura local parecida a esta:
 ```text
 fotos/
 `-- 7A/
-    |-- 7A_001.jpg
-    |-- 7A_002.jpg
+    |-- Nombre Alumno-7A-276719157.jpg
+    |-- Nombre Alumno-7A-274886543.jpg
     |-- index.csv
     `-- session_YYYYMMDD_HHMMSS.txt
+
+fotos_respaldo/
+`-- 7A/
+    |-- Nombre Alumno-7A-276719157.jpg
+    |-- Nombre Alumno-7A-274886543.jpg
+    `-- index.csv
 ```
 
 `index.csv` guarda columnas como:
@@ -155,7 +164,11 @@ fotos/
 - filename
 - student_name
 - course
+- rut
 - timestamp
+
+Si cargas una lista de alumnos, la GUI completa `student_name` y `rut` automaticamente mientras avanza por el curso.
+Las fotos quedan con formato `Nombre Alumno-Curso-RUT.jpg`, usando el RUT sin guion. Si no hay RUT disponible, la app usa `SIN_RUT`.
 
 ## GUI incluida
 
@@ -167,6 +180,9 @@ Incluye:
 - controles mas visibles
 - panel lateral de acciones
 - lista de capturas recientes
+- carga de roster de alumnos para captura secuencial con nombre y RUT
+- respaldo espejo por curso en `fotos_respaldo/`
+- archivos nombrados de forma legible para recuperación manual
 - flujo mas amigable para operadores no tecnicos
 
 Ejecucion:
@@ -209,6 +225,7 @@ Este punto es importante: el repo esta configurado para no subir datos sensibles
 Se ignoran por defecto:
 
 - `fotos/`
+- `fotos_respaldo/`
 - `camera_diagnostic/`
 - `last_camera.json`
 - caches de Python

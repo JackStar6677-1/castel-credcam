@@ -1,28 +1,34 @@
 from __future__ import annotations
 
+import csv
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import tkinter as tk
+from openpyxl import load_workbook
 from PIL import Image, ImageTk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
 from castel_credcam import (  # noqa: E402
+    BACKUP_PHOTOS_DIRNAME,
     CSV_FILENAME,
     PHOTOS_DIRNAME,
     TEST_FOLDER_NAME,
     PhotoRecord,
     append_csv_record,
     backend_key_from_id,
+    backup_course_dir,
+    build_photo_filename,
     configure_capture,
+    ensure_photo_backup,
     list_available_cameras,
     load_camera_aliases,
     load_existing_records,
@@ -34,6 +40,31 @@ from castel_credcam import (  # noqa: E402
     save_last_camera,
     silence_opencv_logs,
 )
+
+
+def _normalize_key(value: str) -> str:
+    import unicodedata
+
+    text = str(value).strip().casefold()
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+
+def _display_name_from_parts(apellido_paterno: str, apellido_materno: str, nombres: str) -> str:
+    pieces = [apellido_paterno.strip(), apellido_materno.strip(), nombres.strip()]
+    return " ".join(part for part in pieces if part)
+
+
+@dataclass
+class RosterStudent:
+    rut: str
+    apellido_paterno: str
+    apellido_materno: str
+    nombres: str
+
+    @property
+    def display_name(self) -> str:
+        return _display_name_from_parts(self.apellido_paterno, self.apellido_materno, self.nombres)
 
 
 APP_TITLE = "CastelCredCam Studio"
@@ -55,18 +86,53 @@ class GuiSession:
     course_display: str
     course_slug: str
     photos_root: Path
+    backup_root: Path
     session_dir: Path
+    backup_dir: Path
     csv_path: Path
     records: list[PhotoRecord]
     started_at: datetime
+    roster_students: list[RosterStudent] = field(default_factory=list)
+    roster_index: int = 0
 
     @property
     def next_id(self) -> int:
         return len(self.records) + 1
 
-    def filename_for(self, photo_id: int) -> str:
-        prefix = "PRUEBA" if self.mode == "test" else self.course_slug
-        return f"{prefix}_{photo_id:03d}.jpg"
+    @property
+    def has_roster(self) -> bool:
+        return bool(self.roster_students)
+
+    @property
+    def roster_total(self) -> int:
+        return len(self.roster_students)
+
+    @property
+    def roster_remaining(self) -> int:
+        return max(0, len(self.roster_students) - self.roster_index)
+
+    def current_roster_student(self) -> Optional[RosterStudent]:
+        if not self.roster_students or self.roster_index < 0 or self.roster_index >= len(self.roster_students):
+            return None
+        return self.roster_students[self.roster_index]
+
+    def advance_roster(self) -> Optional[RosterStudent]:
+        if not self.roster_students:
+            return None
+        self.roster_index = min(self.roster_index + 1, len(self.roster_students))
+        return self.current_roster_student()
+
+    def retreat_roster(self) -> Optional[RosterStudent]:
+        if not self.roster_students:
+            return None
+        self.roster_index = max(0, self.roster_index - 1)
+        return self.current_roster_student()
+
+    def filename_for(self, student_name: str, rut: str = "") -> str:
+        if student_name:
+            course_label = "PRUEBA" if self.mode == "test" else self.course_display
+            return build_photo_filename(student_name, course_label, rut)
+        return f"{self.course_slug}_{len(self.records) + 1:03d}.jpg"
 
 
 class CastelCredCamGUI:
@@ -98,11 +164,15 @@ class CastelCredCamGUI:
         self.mode_var = tk.StringVar(value="test")
         self.course_var = tk.StringVar(value="")
         self.student_var = tk.StringVar(value="")
+        self.roster_path_var = tk.StringVar(value="Lista no cargada")
+        self.roster_status_var = tk.StringVar(value="Carga un Excel o CSV para capturar sin escribir nombres.")
         self.camera_var = tk.StringVar(value="")
         self.preview_camera_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Listo para iniciar. Selecciona camara y sesion.")
         self.session_var = tk.StringVar(value="Sesion no iniciada")
         self.recent_var = tk.StringVar(value="Sin capturas aun.")
+        self.roster_map: dict[str, list[RosterStudent]] = {}
+        self.roster_lookup: dict[str, str] = {}
 
         self.face_guide_var = tk.BooleanVar(value=True)
         self.frame_guide_var = tk.BooleanVar(value=True)
@@ -159,6 +229,7 @@ class CastelCredCamGUI:
         ).pack(anchor="w", padx=20, pady=(0, 14))
 
         self._make_session_card(left)
+        self._make_roster_card(left)
         self._make_camera_card(left)
         self._make_student_card(left)
         self._make_recent_card(left)
@@ -267,8 +338,41 @@ class CastelCredCamGUI:
         ttk.Radiobutton(card, text="Modo prueba", variable=self.mode_var, value="test").pack(anchor="w", padx=14, pady=2)
         ttk.Radiobutton(card, text="Modo curso", variable=self.mode_var, value="course").pack(anchor="w", padx=14, pady=2)
         ttk.Label(card, text="Curso", style="Muted.TLabel").pack(anchor="w", padx=14, pady=(10, 2))
-        ttk.Entry(card, textvariable=self.course_var).pack(fill="x", padx=14, pady=(0, 10))
+        self.course_combo = ttk.Combobox(card, textvariable=self.course_var, state="normal")
+        self.course_combo.pack(fill="x", padx=14, pady=(0, 8))
+        self.course_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_roster_preview(self.course_var.get()))
+        self.course_combo.bind("<Return>", self._handle_course_return)
+        self.course_combo.bind("<KP_Enter>", self._handle_course_return)
+        ttk.Button(card, text="Cargar lista", style="Gold.TButton", command=self.import_roster_file).pack(fill="x", padx=14, pady=(0, 8))
+        ttk.Label(card, textvariable=self.roster_path_var, style="Muted.TLabel", wraplength=280, justify="left").pack(
+            anchor="w", padx=14, pady=(0, 8)
+        )
         ttk.Button(card, text="Iniciar sesion", style="Accent.TButton", command=self.start_session).pack(fill="x", padx=14, pady=(0, 14))
+
+    def _make_roster_card(self, parent: tk.Widget) -> None:
+        card = self._make_card(parent, "Lista de alumnos")
+        tk.Label(
+            card,
+            textvariable=self.roster_status_var,
+            justify="left",
+            anchor="w",
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            font=("Segoe UI", 9),
+            wraplength=300,
+        ).pack(fill="x", padx=14, pady=(0, 10))
+
+        buttons = tk.Frame(card, bg=CARD_BG)
+        buttons.pack(fill="x", padx=14, pady=(0, 6))
+        ttk.Button(buttons, text="Anterior", style="Gold.TButton", command=self.prev_roster_student).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Button(buttons, text="Siguiente", style="Gold.TButton", command=self.next_roster_student).pack(
+            side="left", fill="x", expand=True, padx=(8, 0)
+        )
+        ttk.Button(card, text="Alinear con lista", style="Accent.TButton", command=self.sync_student_with_roster).pack(
+            fill="x", padx=14, pady=(0, 14)
+        )
 
     def _make_camera_card(self, parent: tk.Widget) -> None:
         card = self._make_card(parent, "Camara")
@@ -287,7 +391,8 @@ class CastelCredCamGUI:
         ttk.Label(card, text="Nombre actual", style="Muted.TLabel").pack(anchor="w", padx=14, pady=(0, 2))
         self.student_entry = ttk.Entry(card, textvariable=self.student_var)
         self.student_entry.pack(fill="x", padx=14, pady=(0, 10))
-        self.student_entry.bind("<Return>", lambda _event: self.capture_photo())
+        self.student_entry.bind("<Return>", self._handle_student_return)
+        self.student_entry.bind("<KP_Enter>", self._handle_student_return)
 
         buttons = tk.Frame(card, bg=CARD_BG)
         buttons.pack(fill="x", padx=14, pady=(0, 6))
@@ -332,13 +437,15 @@ class CastelCredCamGUI:
             (
                 "CastelCredCam Studio\n\n"
                 "Flujo recomendado\n"
-                "1. Inicia una sesion en modo prueba o curso.\n"
-                "2. Elige una camara desde la izquierda o desde la barra del preview.\n"
-                "3. Escribe el nombre del estudiante.\n"
-                "4. Usa Enter o el boton Capturar.\n"
-                "5. Revisa la carpeta fotos mientras avanzas.\n\n"
+                "1. Carga una lista de alumnos en Excel o CSV.\n"
+                "2. Elige el curso en el campo Curso.\n"
+                "3. Inicia la sesion.\n"
+                "4. La app te va mostrando el siguiente alumno y su RUT.\n"
+                "5. Usa Enter o el boton Capturar para avanzar automaticamente.\n"
+                "6. Revisa la carpeta fotos mientras avanzas.\n\n"
                 "Atajos\n"
                 "- Enter: capturar foto\n"
+                "- Ctrl+Izquierda / Ctrl+Derecha: mover alumno en la lista\n"
                 "- C: siguiente camara\n"
                 "- V: voltear horizontalmente\n"
                 "- R: activar o desactivar ayuda de rostro\n"
@@ -361,10 +468,271 @@ class CastelCredCamGUI:
                 "- Manten la camara fija en tripode.\n"
                 "- Si usas Recortar, procura que el rostro quede visible y centrado.\n"
                 "- Haz una sesion de prueba antes de un curso real.\n"
-                "- Verifica que el nombre este correcto antes de capturar.\n"
+                "- Verifica que el alumno actual sea el correcto antes de capturar.\n"
             ),
         )
         info.configure(state="disabled")
+
+    def _extract_course_label(self, sheet) -> str:
+        raw = sheet["A1"].value if sheet.max_row else None
+        if isinstance(raw, str) and raw.strip().upper().startswith("LISTA ALUMNOS POR CURSO"):
+            return raw.strip().replace("LISTA ALUMNOS POR CURSO", "", 1).strip()
+        return str(sheet.title).strip()
+
+    def _extract_students_from_rows(self, rows) -> list[RosterStudent]:
+        header_index = None
+        header_map: dict[str, int] = {}
+        wanted = {
+            "rut",
+            "apellido paterno",
+            "apellido materno",
+            "primer nombre",
+            "segundo nombre",
+            "nombres",
+        }
+
+        for row_index, row in enumerate(rows[:20]):
+            values = ["" if value is None else str(value).strip() for value in row]
+            normalized = [_normalize_key(value) for value in values]
+            if "rut" not in normalized:
+                continue
+            if not any(key in normalized for key in ("apellido paterno", "apellido materno", "nombres")):
+                continue
+            header_index = row_index
+            for col_index, value in enumerate(normalized):
+                if value in wanted:
+                    header_map[value] = col_index
+            break
+
+        if header_index is None or "rut" not in header_map:
+            return []
+
+        students: list[RosterStudent] = []
+        for row in rows[header_index + 1 :]:
+            values = ["" if value is None else str(value).strip() for value in row]
+            if not any(values):
+                continue
+
+            rut = values[header_map["rut"]] if "rut" in header_map and header_map["rut"] < len(values) else ""
+            apellido_paterno = values[header_map.get("apellido paterno", -1)] if header_map.get("apellido paterno", -1) >= 0 and header_map.get("apellido paterno", -1) < len(values) else ""
+            apellido_materno = values[header_map.get("apellido materno", -1)] if header_map.get("apellido materno", -1) >= 0 and header_map.get("apellido materno", -1) < len(values) else ""
+            primer_nombre = values[header_map.get("primer nombre", -1)] if header_map.get("primer nombre", -1) >= 0 and header_map.get("primer nombre", -1) < len(values) else ""
+            segundo_nombre = values[header_map.get("segundo nombre", -1)] if header_map.get("segundo nombre", -1) >= 0 and header_map.get("segundo nombre", -1) < len(values) else ""
+            nombres = values[header_map.get("nombres", -1)] if header_map.get("nombres", -1) >= 0 and header_map.get("nombres", -1) < len(values) else ""
+
+            if not nombres:
+                names_parts = [part for part in (primer_nombre, segundo_nombre) if part]
+                nombres = " ".join(names_parts)
+
+            if not rut or not (apellido_paterno or apellido_materno or nombres):
+                continue
+
+            students.append(
+                RosterStudent(
+                    rut=rut,
+                    apellido_paterno=apellido_paterno,
+                    apellido_materno=apellido_materno,
+                    nombres=nombres,
+                )
+            )
+
+        return students
+
+    def _load_roster_csv(self, path: Path) -> dict[str, list[RosterStudent]]:
+        roster: dict[str, list[RosterStudent]] = {}
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row:
+                    continue
+                course = (row.get("course") or row.get("curso") or "").strip()
+                rut = (row.get("rut") or row.get("RUT") or "").strip()
+                apellido_paterno = (row.get("apellido paterno") or row.get("apellido_paterno") or row.get("paterno") or "").strip()
+                apellido_materno = (row.get("apellido materno") or row.get("apellido_materno") or row.get("materno") or "").strip()
+                nombres = (row.get("nombres") or row.get("nombre") or "").strip()
+                if not nombres:
+                    primer_nombre = (row.get("primer nombre") or row.get("primer_nombre") or "").strip()
+                    segundo_nombre = (row.get("segundo nombre") or row.get("segundo_nombre") or "").strip()
+                    nombres = " ".join(part for part in (primer_nombre, segundo_nombre) if part)
+                if not course or not rut or not apellido_paterno:
+                    continue
+                roster.setdefault(course, []).append(
+                    RosterStudent(
+                        rut=rut,
+                        apellido_paterno=apellido_paterno,
+                        apellido_materno=apellido_materno,
+                        nombres=nombres,
+                    )
+                )
+        for students in roster.values():
+            students.sort(key=lambda item: _normalize_key(item.display_name))
+        return roster
+
+    def _load_roster_excel(self, path: Path) -> dict[str, list[RosterStudent]]:
+        workbook = load_workbook(path, data_only=True, read_only=True)
+        roster: dict[str, list[RosterStudent]] = {}
+        for sheet in workbook.worksheets:
+            if _normalize_key(sheet.title) == "resumen":
+                continue
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows:
+                continue
+            course_label = self._extract_course_label(sheet)
+            students = self._extract_students_from_rows(rows)
+            if students:
+                roster[course_label] = students
+        for students in roster.values():
+            students.sort(key=lambda item: _normalize_key(item.display_name))
+        return roster
+
+    def _load_roster_source(self, path: Path) -> dict[str, list[RosterStudent]]:
+        suffix = path.suffix.lower()
+        if suffix == ".csv":
+            return self._load_roster_csv(path)
+        if suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
+            return self._load_roster_excel(path)
+        raise ValueError("Solo se aceptan archivos CSV o Excel.")
+
+    def import_roster_file(self) -> None:
+        path_str = filedialog.askopenfilename(
+            title="Selecciona la lista de alumnos",
+            filetypes=[
+                ("Excel o CSV", "*.xlsx *.xlsm *.xltx *.xltm *.csv"),
+                ("Excel", "*.xlsx *.xlsm *.xltx *.xltm"),
+                ("CSV", "*.csv"),
+                ("Todos los archivos", "*.*"),
+            ],
+        )
+        if not path_str:
+            return
+
+        path = Path(path_str)
+        try:
+            roster_map = self._load_roster_source(path)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"No se pudo cargar la lista.\n\n{exc}")
+            return
+
+        if not roster_map:
+            messagebox.showwarning(APP_TITLE, "No encontré cursos con alumnos dentro del archivo seleccionado.")
+            return
+
+        self.roster_map = roster_map
+        self.roster_lookup = {_normalize_key(course): course for course in roster_map}
+        course_names = sorted(roster_map.keys(), key=_normalize_key)
+        self.course_combo["values"] = course_names
+        self.roster_path_var.set(f"Lista cargada: {path.name}")
+
+        current_course = self.course_var.get().strip()
+        resolved = self._resolve_roster_course(current_course) if current_course else ""
+        if not resolved:
+            resolved = course_names[0]
+            self.course_var.set(resolved)
+
+        self._update_roster_preview(resolved)
+        self.status_var.set(f"Lista lista: {path.name}. Elige curso y arranca la sesion.")
+
+    def _resolve_roster_course(self, course_name: str) -> str:
+        if not course_name:
+            return ""
+        normalized = _normalize_key(course_name)
+        if normalized in self.roster_lookup:
+            return self.roster_lookup[normalized]
+        for key in self.roster_map:
+            if _normalize_key(key) == normalized:
+                return key
+        return ""
+
+    def _update_roster_preview(self, course_name: str = "") -> None:
+        if not self.roster_map:
+            self.roster_status_var.set("Carga una lista para habilitar captura secuencial.")
+            return
+
+        resolved = self._resolve_roster_course(course_name) if course_name else ""
+        if not resolved and len(self.roster_map) == 1:
+            resolved = next(iter(self.roster_map))
+
+        if not resolved:
+            total = sum(len(items) for items in self.roster_map.values())
+            self.roster_status_var.set(f"Lista cargada con {len(self.roster_map)} cursos y {total} alumnos.\nElige un curso.")
+            return
+
+        students = self.roster_map.get(resolved, [])
+        next_student = students[0] if students else None
+        if next_student is None:
+            self.roster_status_var.set(f"{resolved}\nSin alumnos cargados.")
+            return
+
+        self.roster_status_var.set(
+            f"{resolved}\nAlumno 1 de {len(students)}\nSiguiente: {next_student.display_name}\nRUT: {next_student.rut}"
+        )
+
+    def _sync_session_student_from_roster(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        student = self.session.current_roster_student()
+        if student is None:
+            self.student_var.set("")
+            self._update_roster_session_label()
+            return
+        self.student_var.set(student.display_name)
+        self._update_roster_session_label()
+
+    def _update_roster_session_label(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            self.roster_status_var.set("Lista cargada.\nLa captura secuencial queda lista al iniciar la sesión.")
+            return
+        student = self.session.current_roster_student()
+        if student is None:
+            self.roster_status_var.set(f"{self.session.course_display}\nLista completa.\nRevisa las capturas finales.")
+            return
+        self.roster_status_var.set(
+            f"{self.session.course_display}\nActual: {student.display_name}\nRUT: {student.rut}\nPendientes: {self.session.roster_remaining}"
+        )
+
+    def next_roster_student(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        self.session.advance_roster()
+        self._sync_session_student_from_roster()
+        self.status_var.set("Siguiente alumno.")
+
+    def prev_roster_student(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        self.session.retreat_roster()
+        self._sync_session_student_from_roster()
+        self.status_var.set("Alumno anterior.")
+
+    def sync_student_with_roster(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            messagebox.showinfo(APP_TITLE, "Primero inicia una sesion con una lista cargada.")
+            return
+        self._sync_session_student_from_roster()
+        self.status_var.set("Alumno alineado con la lista.")
+
+    def _handle_student_return(self, _event=None):
+        self.capture_photo()
+        return "break"
+
+    def _handle_course_return(self, _event=None):
+        self._update_roster_preview(self.course_var.get())
+        return "break"
+
+    def _handle_global_return(self, _event=None):
+        widget = self.root.focus_get()
+        if widget is self.student_entry:
+            self.capture_photo()
+            return "break"
+        if widget is self.course_combo:
+            self._update_roster_preview(self.course_var.get())
+            return "break"
+        if widget is not None:
+            widget_class = widget.winfo_class()
+            if widget_class in {"TButton", "Button"}:
+                return None
+        self.capture_photo()
+        return "break"
 
     def _load_camera_choices(self) -> None:
         values = []
@@ -693,11 +1061,19 @@ class CastelCredCamGUI:
         saved = len(self.session.records) if self.session else 0
         typed_name = self.student_var.get().strip() or "-"
         camera = self.current_camera_alias or "Sin camara"
+        roster_text = "Sin lista cargada"
+        if self.session is not None and self.session.has_roster:
+            student = self.session.current_roster_student()
+            if student is not None:
+                roster_text = f"{student.display_name} | RUT {student.rut} | Restan {self.session.roster_remaining}"
+            else:
+                roster_text = "Lista completa"
 
         crop_mode = "ON" if self.crop_portrait_var.get() else "OFF"
         lines = [
             f"{course} | Foto {photo_no:03d} | Guardadas {saved}",
             f"Estudiante: {typed_name} | Cam: {camera}",
+            f"Lista: {roster_text}",
             f"Enter captura | Auto credencial {'ON' if self.crop_portrait_var.get() else 'OFF'} | X cambia",
         ]
 
@@ -711,11 +1087,14 @@ class CastelCredCamGUI:
         mode = self.mode_var.get()
         photos_root = APP_ROOT / PHOTOS_DIRNAME
         photos_root.mkdir(parents=True, exist_ok=True)
+        backup_root = APP_ROOT / BACKUP_PHOTOS_DIRNAME
+        backup_root.mkdir(parents=True, exist_ok=True)
 
         if mode == "test":
             course_display = "PRUEBA"
             course_slug = "PRUEBA"
             session_dir = photos_root / TEST_FOLDER_NAME
+            backup_dir = backup_root / TEST_FOLDER_NAME
         else:
             course_display = self.course_var.get().strip()
             if not course_display:
@@ -723,11 +1102,29 @@ class CastelCredCamGUI:
                 return
             course_slug = sanitize_folder_name(course_display)
             session_dir = photos_root / course_slug
+            backup_dir = backup_course_dir(photos_root, course_slug)
+
+        roster_students: list[RosterStudent] = []
+        roster_course = self._resolve_roster_course(course_display)
+        if self.roster_map:
+            if not roster_course and len(self.roster_map) == 1:
+                roster_course = next(iter(self.roster_map))
+            if roster_course:
+                roster_students = list(self.roster_map.get(roster_course, []))
+                course_display = roster_course
+                course_slug = sanitize_folder_name(course_display)
+                session_dir = photos_root / course_slug
+                backup_dir = backup_course_dir(photos_root, course_slug)
+                self.course_var.set(course_display)
+            elif len(self.roster_map) > 1:
+                messagebox.showwarning(APP_TITLE, "Elegiste modo curso, pero la lista cargada tiene varios cursos. Selecciona uno en el campo Curso.")
+                return
 
         session_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir.mkdir(parents=True, exist_ok=True)
         csv_path = session_dir / CSV_FILENAME
         if not csv_path.exists():
-            csv_path.write_text("id,filename,student_name,course,timestamp\n", encoding="utf-8")
+            csv_path.write_text("id,filename,student_name,course,rut,timestamp\n", encoding="utf-8")
         records = load_existing_records(csv_path)
 
         self.session = GuiSession(
@@ -735,13 +1132,18 @@ class CastelCredCamGUI:
             course_display=course_display,
             course_slug=course_slug,
             photos_root=photos_root,
+            backup_root=backup_root,
             session_dir=session_dir,
+            backup_dir=backup_dir,
             csv_path=csv_path,
             records=records,
             started_at=datetime.now(),
+            roster_students=roster_students,
         )
         self.session_var.set(f"Sesion activa: {course_display} | Carpeta: {session_dir.name}")
         self.status_var.set(f"Sesion iniciada en {session_dir}")
+        self._sync_session_student_from_roster()
+        self._update_roster_session_label()
         self._refresh_recent()
         open_folder(photos_root)
 
@@ -753,10 +1155,22 @@ class CastelCredCamGUI:
             messagebox.showwarning(APP_TITLE, "Todavia no hay un frame valido de camara.")
             return
 
-        student_name = self.student_var.get().strip()
+        typed_name = self.student_var.get().strip()
+        roster_student = self.session.current_roster_student() if self.session.has_roster else None
+        if self.session.has_roster and roster_student is None:
+            messagebox.showinfo(APP_TITLE, "La lista de alumnos ya se terminó.")
+            return
+        if roster_student is not None and typed_name:
+            student_name = typed_name
+        elif roster_student is not None:
+            student_name = roster_student.display_name
+        else:
+            student_name = typed_name
         if not student_name:
             messagebox.showwarning(APP_TITLE, "Escribe el nombre del estudiante.")
             return
+
+        student_rut = roster_student.rut if roster_student is not None else ""
 
         countdown = int(self.countdown_var.get().split()[0])
         for remaining in range(countdown, 0, -1):
@@ -765,9 +1179,10 @@ class CastelCredCamGUI:
             self.root.after(1000)
 
         photo_id = self.session.next_id
-        filename = self.session.filename_for(photo_id)
+        filename = self.session.filename_for(student_name, student_rut)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         image_path = self.session.session_dir / filename
+        backup_path = self.session.backup_dir / filename
 
         if not cv2.imwrite(str(image_path), self.current_frame.copy()):
             messagebox.showerror(APP_TITLE, f"No se pudo guardar la imagen en {image_path}")
@@ -778,12 +1193,24 @@ class CastelCredCamGUI:
             filename=filename,
             student_name=student_name,
             course=self.session.course_display,
+            rut=student_rut,
             timestamp=timestamp,
         )
         append_csv_record(self.session.csv_path, record)
+        backup_status = "respaldo OK"
+        try:
+            ensure_photo_backup(image_path, backup_path)
+            ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
+        except Exception as exc:
+            backup_status = f"respaldo parcial: {exc}"
         self.session.records.append(record)
-        self.student_var.set("")
-        self.status_var.set(f"Guardada: {filename} | {student_name}")
+        if self.session.has_roster:
+            self.session.advance_roster()
+            self._sync_session_student_from_roster()
+        else:
+            self.student_var.set("")
+        self.status_var.set(f"Guardada: {filename} | {student_name} | {backup_status}")
+        self._update_roster_session_label()
         self._refresh_recent()
 
     def retake_last(self) -> None:
@@ -795,9 +1222,21 @@ class CastelCredCamGUI:
         image_path = self.session.session_dir / record.filename
         if image_path.exists():
             image_path.unlink()
+        backup_image_path = self.session.backup_dir / record.filename
+        if backup_image_path.exists():
+            backup_image_path.unlink()
         rewrite_csv(self.session.csv_path, self.session.records)
-        self.student_var.set(record.student_name)
+        try:
+            ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
+        except Exception:
+            pass
+        if self.session.has_roster:
+            self.session.retreat_roster()
+            self._sync_session_student_from_roster()
+        else:
+            self.student_var.set(record.student_name)
         self.status_var.set(f"Rehecha la ultima captura. Nombre restaurado: {record.student_name}")
+        self._update_roster_session_label()
         self._refresh_recent()
 
     def close_session(self) -> None:
@@ -807,6 +1246,7 @@ class CastelCredCamGUI:
         self.session_var.set("Sesion no iniciada")
         self.session = None
         self.student_var.set("")
+        self._update_roster_preview(self.course_var.get())
         self._refresh_recent()
 
     def open_photos_root(self) -> None:
@@ -818,12 +1258,19 @@ class CastelCredCamGUI:
         if self.session is None or not self.session.records:
             self.recent_var.set("Sin capturas aun.")
             return
-        self.recent_var.set("\n".join(f"{r.id:03d}  {r.filename}  {r.student_name}" for r in self.session.records[-6:]))
+        def describe(record: PhotoRecord) -> str:
+            rut = f"  {record.rut}" if getattr(record, "rut", "") else ""
+            return f"{record.id:03d}  {record.filename}  {record.student_name}{rut}"
+
+        self.recent_var.set("\n".join(describe(r) for r in self.session.records[-6:]))
 
     def _bind_shortcuts(self) -> None:
-        self.root.bind("<Return>", lambda _event: self.capture_photo())
+        self.root.bind("<Return>", self._handle_global_return)
+        self.root.bind("<KP_Enter>", self._handle_global_return)
         self.root.bind("<KeyPress-c>", lambda _event: self.cycle_camera())
         self.root.bind("<KeyPress-C>", lambda _event: self.cycle_camera())
+        self.root.bind("<Control-Right>", lambda _event: self.next_roster_student())
+        self.root.bind("<Control-Left>", lambda _event: self.prev_roster_student())
         self.root.bind("<KeyPress-v>", lambda _event: self._toggle_mirror())
         self.root.bind("<KeyPress-V>", lambda _event: self._toggle_mirror())
         self.root.bind("<KeyPress-r>", lambda _event: self._toggle_face())
