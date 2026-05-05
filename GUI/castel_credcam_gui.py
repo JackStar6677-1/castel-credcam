@@ -159,6 +159,9 @@ class CastelCredCamGUI:
         self.current_face_box: Optional[tuple[int, int, int, int]] = None
         self.current_crop_box: Optional[tuple[int, int, int, int]] = None
         self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
+        self.sidebar_canvas: Optional[tk.Canvas] = None
+        self.sidebar_content: Optional[ttk.Frame] = None
+        self.sidebar_window_id: Optional[int] = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
         self.mode_var = tk.StringVar(value="test")
@@ -210,29 +213,53 @@ class CastelCredCamGUI:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
-        left = ttk.Frame(self.root, style="Panel.TFrame", width=320)
-        left.grid(row=0, column=0, sticky="nsew")
-        left.grid_propagate(False)
+        left_shell = ttk.Frame(self.root, style="Panel.TFrame", width=340)
+        left_shell.grid(row=0, column=0, sticky="nsew")
+        left_shell.grid_propagate(False)
+        left_shell.grid_rowconfigure(0, weight=1)
+        left_shell.grid_columnconfigure(0, weight=1)
+
+        sidebar_canvas = tk.Canvas(left_shell, bg=PANEL_BG, highlightthickness=0, bd=0)
+        sidebar_scrollbar = ttk.Scrollbar(left_shell, orient="vertical", command=sidebar_canvas.yview)
+        sidebar_canvas.configure(yscrollcommand=sidebar_scrollbar.set)
+        sidebar_canvas.grid(row=0, column=0, sticky="nsew")
+        sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        sidebar_content = ttk.Frame(sidebar_canvas, style="Panel.TFrame")
+        self.sidebar_canvas = sidebar_canvas
+        self.sidebar_content = sidebar_content
+        self.sidebar_window_id = sidebar_canvas.create_window((0, 0), window=sidebar_content, anchor="nw")
+
+        def _sync_scrollregion(_event: tk.Event) -> None:
+            sidebar_canvas.configure(scrollregion=sidebar_canvas.bbox("all"))
+
+        def _sync_content_width(event: tk.Event) -> None:
+            if self.sidebar_window_id is not None:
+                sidebar_canvas.itemconfigure(self.sidebar_window_id, width=event.width)
+
+        sidebar_content.bind("<Configure>", _sync_scrollregion)
+        sidebar_canvas.bind("<Configure>", _sync_content_width)
+        self._bind_sidebar_mousewheel(sidebar_canvas)
 
         right = ttk.Frame(self.root, style="Panel.TFrame")
         right.grid(row=0, column=1, sticky="nsew", padx=(0, 16), pady=16)
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        ttk.Label(left, text=APP_TITLE, style="Title.TLabel").pack(anchor="w", padx=18, pady=(18, 4))
+        ttk.Label(sidebar_content, text=APP_TITLE, style="Title.TLabel").pack(anchor="w", padx=18, pady=(18, 4))
         tk.Label(
-            left,
+            sidebar_content,
             text="Captura por curso con estilo morado y dorado",
             bg=PANEL_BG,
             fg=ACCENT_GOLD,
             font=("Segoe UI", 10, "bold"),
         ).pack(anchor="w", padx=20, pady=(0, 14))
 
-        self._make_session_card(left)
-        self._make_roster_card(left)
-        self._make_camera_card(left)
-        self._make_student_card(left)
-        self._make_recent_card(left)
+        self._make_session_card(sidebar_content)
+        self._make_roster_card(sidebar_content)
+        self._make_camera_card(sidebar_content)
+        self._make_student_card(sidebar_content)
+        self._make_recent_card(sidebar_content)
 
         notebook = ttk.Notebook(right)
         notebook.grid(row=0, column=0, sticky="nsew")
@@ -416,6 +443,30 @@ class CastelCredCamGUI:
             font=("Consolas", 9),
             wraplength=300,
         ).pack(fill="x", padx=14, pady=(0, 14))
+
+    def _bind_sidebar_mousewheel(self, canvas: tk.Canvas) -> None:
+        def _is_within_sidebar(widget: Optional[tk.Misc]) -> bool:
+            current = widget
+            while current is not None:
+                if current == self.sidebar_content:
+                    return True
+                try:
+                    current = current.nametowidget(current.winfo_parent())
+                except Exception:
+                    return False
+            return False
+
+        def _on_mousewheel(event: tk.Event) -> str:
+            if not _is_within_sidebar(getattr(event, "widget", None)):
+                return ""
+            delta = getattr(event, "delta", 0)
+            if delta:
+                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                return "break"
+            return ""
+
+        self.root.bind_all("<MouseWheel>", _on_mousewheel, add="+")
+        self.root.bind_all("<Shift-MouseWheel>", _on_mousewheel, add="+")
 
     def _build_info_page(self, parent: tk.Widget) -> None:
         parent.grid_rowconfigure(0, weight=1)
