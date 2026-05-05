@@ -1391,16 +1391,10 @@ class CastelCredCamQt(QMainWindow):
             crop_box = self._compute_portrait_crop_box(transformed.shape[1], transformed.shape[0], face_box)
             crop_box = self._smooth_crop_box(crop_box)
             self.current_crop_box = crop_box
-            output = self._crop_frame_with_box(transformed, crop_box, output_size=(900, 1200))
+            output = self._crop_frame_with_box(transformed, crop_box, output_size=(1000, 1400))
         else:
             self.current_crop_box = None
             self.stable_crop_box = None
-
-        if for_preview:
-            if self.guide_check.isChecked():
-                self._draw_context_guides(output, transformed.shape[1], transformed.shape[0], crop_box, face_box)
-            if self.face_check.isChecked() and face_box is not None:
-                self._draw_face_anchor(output, transformed.shape[1], transformed.shape[0], crop_box, face_box)
 
         return output
 
@@ -1418,13 +1412,13 @@ class CastelCredCamQt(QMainWindow):
             fx, fy, fw, fh = face_box
             face_cx = fx + fw / 2
             face_cy = fy + fh / 2
-            crop_h = max(int(fh * 2.45), int(height * 0.58))
+            crop_h = max(int(fh * 2.9), int(height * 0.66))
             crop_h = min(crop_h, max_crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = int(face_cx - crop_w / 2)
-            y1 = int(face_cy - crop_h * 0.36)
+            y1 = int(face_cy - crop_h * 0.42)
         else:
-            crop_h = int(max_crop_h * 0.9)
+            crop_h = int(max_crop_h * 0.95)
             crop_h = max(240, crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = (width - crop_w) // 2
@@ -1461,7 +1455,7 @@ class CastelCredCamQt(QMainWindow):
         ):
             return self.stable_crop_box
 
-        alpha = 0.12
+        alpha = 0.16
         prev_cx = (prev_x1 + prev_x2) / 2
         prev_cy = (prev_y1 + prev_y2) / 2
         next_cx = (next_x1 + next_x2) / 2
@@ -1469,7 +1463,7 @@ class CastelCredCamQt(QMainWindow):
 
         blended_cx = prev_cx + (next_cx - prev_cx) * alpha
         blended_cy = prev_cy + (next_cy - prev_cy) * alpha
-        blended_h = max(240, prev_h + (next_h - prev_h) * alpha)
+        blended_h = max(260, prev_h + (next_h - prev_h) * alpha)
         blended_w = blended_h * (3 / 4)
 
         x1 = int(blended_cx - blended_w / 2)
@@ -1504,19 +1498,9 @@ class CastelCredCamQt(QMainWindow):
             x1, y1, x2, y2 = crop_box
             scale_x = width / max(1, x2 - x1)
             scale_y = height / max(1, y2 - y1)
-            cv2.rectangle(frame, (6, 6), (width - 7, height - 7), (93, 201, 244), 2)
-            cv2.line(frame, (width // 2, 6), (width // 2, height - 7), (93, 201, 244), 1)
-            cv2.line(frame, (6, int(height * 0.38)), (width - 7, int(height * 0.38)), (93, 201, 244), 1)
-            cv2.putText(
-                frame,
-                "Rostro sigue al recorte",
-                (12, max(28, int(height * 0.08))),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.52,
-                (93, 201, 244),
-                1,
-                cv2.LINE_AA,
-            )
+            cv2.rectangle(frame, (8, 8), (width - 9, height - 9), (93, 201, 244), 2)
+            cv2.line(frame, (width // 2, 8), (width // 2, height - 9), (93, 201, 244), 1)
+            cv2.line(frame, (8, int(height * 0.38)), (width - 9, int(height * 0.38)), (93, 201, 244), 1)
             if face_box is not None:
                 fx, fy, fw, fh = face_box
                 rel_x1 = int((fx - x1) * scale_x)
@@ -1534,14 +1518,7 @@ class CastelCredCamQt(QMainWindow):
         else:
             self._draw_guides(frame)
 
-    def _draw_face_anchor(
-        self,
-        frame: np.ndarray,
-        source_width: int,
-        source_height: int,
-        crop_box: Optional[tuple[int, int, int, int]],
-        face_box: tuple[int, int, int, int],
-    ) -> None:
+    def _draw_face_anchor(self, frame: np.ndarray, crop_box: Optional[tuple[int, int, int, int]], face_box: tuple[int, int, int, int]) -> None:
         if crop_box is None:
             x, y, w, h = face_box
             cv2.rectangle(frame, (x, y), (x + w, y + h), (244, 201, 93), 2)
@@ -1569,6 +1546,27 @@ class CastelCredCamQt(QMainWindow):
             1,
             cv2.LINE_AA,
         )
+
+    def _preview_status_lines(self) -> list[str]:
+        course = self._active_course_text()
+        current = self._current_student()
+        student = current.display_name if current is not None else "-"
+        rut = current.rut if current is not None and current.rut else "-"
+        mode_text = "Curso" if self.mode_radio_course_checked() else "Prueba"
+        status = "Vista previa"
+        if self.session is not None:
+            status = f"{len(self.session.records)} capturados | {self.session.roster_remaining} pendientes"
+        elif self.roster_map:
+            status = f"{len(self._active_students())} alumnos cargados"
+        return [
+            f"{course} | {mode_text}",
+            f"{student}",
+            f"RUT: {rut}",
+            status,
+        ]
+
+    def _mode_radio_course_checked(self) -> bool:
+        return self.course_radio.isChecked()
 
     def _draw_guides(self, frame: np.ndarray) -> None:
         height, width = frame.shape[:2]
@@ -1605,17 +1603,13 @@ class CastelCredCamQt(QMainWindow):
             return
         frame = self._apply_settings_to_frame(self.latest_frame, for_preview=True)
 
-        session_text = self._preview_header_text()
-        overlay = frame.copy()
-        header_height = 100
-        cv2.rectangle(overlay, (0, 0), (overlay.shape[1], header_height), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
-
-        lines = [session_text[0], session_text[1], session_text[2], session_text[3]]
-        y = 24
-        for idx, line in enumerate(lines):
-            cv2.putText(frame, line, (16, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58 if idx else 0.62, (255, 255, 255), 1, cv2.LINE_AA)
-            y += 21
+        if self.guide_check.isChecked() or self.face_check.isChecked():
+            info_lines = self._preview_status_lines()
+            banner_height = 78
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (overlay.shape[1], banner_height), (17, 8, 26), -1)
+            cv2.addWeighted(overlay, 0.42, frame, 0.58, 0, frame)
+            self._draw_preview_banner(frame, info_lines, banner_height)
 
         pixmap = _cv_to_qpixmap(frame)
         scaled = pixmap.scaled(
@@ -1626,29 +1620,33 @@ class CastelCredCamQt(QMainWindow):
         self.preview_label.setPixmap(scaled)
         self.preview_label.setText("")
 
-    def _preview_header_text(self) -> tuple[str, str, str, str]:
-        course = self._active_course_text()
-        current = self._current_student()
-        if current is None:
-            student = "Estudiante: -"
-            rut = "RUT: -"
-        else:
-            student = f"Estudiante: {current.display_name}"
-            rut = f"RUT: {current.rut or '-'}"
-        progress = (
-            f"{len(self.session.records)} capturados | {self.session.roster_remaining} pendientes"
-            if self.session is not None and self.session.has_roster
-            else "Vista previa sin sesion"
-        )
-        hotkeys = "Enter captura | Ctrl+N/P cambia | Ctrl+R rehace"
+    def _draw_preview_banner(self, frame: np.ndarray, lines: list[str], banner_height: int) -> None:
+        y = 22
+        for idx, line in enumerate(lines):
+            font_scale = 0.60 if idx == 0 else 0.50
+            thickness = 2 if idx == 0 else 1
+            cv2.putText(
+                frame,
+                line,
+                (16, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                (245, 241, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
+            y += 18 if idx == 0 else 17
         if self.countdown_remaining > 0:
-            hotkeys = f"Captura en {self.countdown_remaining}s"
-        return (
-            f"Curso: {course}",
-            student,
-            rut,
-            f"{progress} | {hotkeys}",
-        )
+            cv2.putText(
+                frame,
+                f"Captura en {self.countdown_remaining}s",
+                (16, banner_height - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.52,
+                (240, 200, 92),
+                1,
+                cv2.LINE_AA,
+            )
 
     def _on_frame_ready(self, frame: object) -> None:
         try:
