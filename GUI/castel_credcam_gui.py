@@ -55,6 +55,11 @@ def _display_name_from_parts(apellido_paterno: str, apellido_materno: str, nombr
     return " ".join(part for part in pieces if part)
 
 
+def _normalize_rut_key(value: str) -> str:
+    text = str(value).strip().upper()
+    return "".join(ch for ch in text if ch.isdigit() or ch == "K")
+
+
 @dataclass
 class RosterStudent:
     rut: str
@@ -159,12 +164,29 @@ class CastelCredCamGUI:
         self.student_manual_frame: Optional[tk.Frame] = None
         self.student_clear_button: Optional[ttk.Button] = None
         self.student_card_title_var: Optional[tk.StringVar] = None
+        self.course_tree: Optional[ttk.Treeview] = None
+        self.course_progress_var: Optional[tk.IntVar] = None
+        self.course_progress_text_var: Optional[tk.StringVar] = None
+        self.course_total_var: Optional[tk.StringVar] = None
+        self.course_current_var: Optional[tk.StringVar] = None
         self.current_face_box: Optional[tuple[int, int, int, int]] = None
         self.current_crop_box: Optional[tuple[int, int, int, int]] = None
         self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
         self.sidebar_canvas: Optional[tk.Canvas] = None
         self.sidebar_content: Optional[ttk.Frame] = None
         self.sidebar_window_id: Optional[int] = None
+        self.left_shell: Optional[ttk.Frame] = None
+        self.capture_page: Optional[tk.Frame] = None
+        self.course_page: Optional[tk.Frame] = None
+        self.info_page: Optional[tk.Frame] = None
+        self.preview_card: Optional[tk.Frame] = None
+        self.preview_toolbar: Optional[tk.Frame] = None
+        self.preview_tool_row: Optional[tk.Frame] = None
+        self.info_text: Optional[tk.Text] = None
+        self.session_title_label: Optional[ttk.Label] = None
+        self.sidebar_subtitle_label: Optional[tk.Label] = None
+        self.sidebar_title_label: Optional[ttk.Label] = None
+        self._last_layout_size: tuple[int, int] = (0, 0)
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
         self.mode_var = tk.StringVar(value="test")
@@ -192,32 +214,37 @@ class CastelCredCamGUI:
         self._configure_style()
         self._build_layout()
         self._load_camera_choices()
+        self.root.bind("<Configure>", self._sync_responsive_layout)
+        self.root.after_idle(self._sync_responsive_layout)
         self._bind_shortcuts()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _configure_style(self) -> None:
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure("Panel.TFrame", background=PANEL_BG)
-        style.configure("Card.TFrame", background=CARD_BG)
-        style.configure("Title.TLabel", background=PANEL_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 22, "bold"))
-        style.configure("Muted.TLabel", background=CARD_BG, foreground=TEXT_MUTED, font=("Segoe UI", 9))
-        style.configure("Accent.TButton", background=ACCENT_PURPLE, foreground=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"), padding=8)
-        style.map("Accent.TButton", background=[("active", "#A56CFF")])
-        style.configure("Gold.TButton", background=ACCENT_GOLD, foreground="#291600", font=("Segoe UI", 10, "bold"), padding=8)
-        style.map("Gold.TButton", background=[("active", "#FFD97F")])
-        style.configure("Danger.TButton", background=DANGER, foreground=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"), padding=8)
-        style.configure("TEntry", fieldbackground="#FFF9FE", foreground="#180E24", padding=6)
-        style.configure("TCombobox", fieldbackground="#FFF9FE", foreground="#180E24", padding=4)
-        style.configure("TRadiobutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 10))
-        style.map("TRadiobutton", background=[("active", CARD_BG)])
-        style.configure("TCheckbutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 10))
+        self.style = ttk.Style(self.root)
+        self.style.theme_use("clam")
+        self.style.configure("Panel.TFrame", background=PANEL_BG)
+        self.style.configure("Card.TFrame", background=CARD_BG)
+        self.style.configure("Title.TLabel", background=PANEL_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 22, "bold"))
+        self.style.configure("Muted.TLabel", background=CARD_BG, foreground=TEXT_MUTED, font=("Segoe UI", 9))
+        self.style.configure("Accent.TButton", background=ACCENT_PURPLE, foreground=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"), padding=8)
+        self.style.map("Accent.TButton", background=[("active", "#A56CFF")])
+        self.style.configure("Gold.TButton", background=ACCENT_GOLD, foreground="#291600", font=("Segoe UI", 10, "bold"), padding=8)
+        self.style.map("Gold.TButton", background=[("active", "#FFD97F")])
+        self.style.configure("Danger.TButton", background=DANGER, foreground=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"), padding=8)
+        self.style.configure("TEntry", fieldbackground="#FFF9FE", foreground="#180E24", padding=6)
+        self.style.configure("TCombobox", fieldbackground="#FFF9FE", foreground="#180E24", padding=4)
+        self.style.configure("TRadiobutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 10))
+        self.style.map("TRadiobutton", background=[("active", CARD_BG)])
+        self.style.configure("TCheckbutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 10))
+        self.style.configure("Treeview", background="#1D102A", fieldbackground="#1D102A", foreground=TEXT_PRIMARY, rowheight=28)
+        self.style.configure("Treeview.Heading", background="#2F1847", foreground=ACCENT_GOLD, font=("Segoe UI", 10, "bold"))
 
     def _build_layout(self) -> None:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
         left_shell = ttk.Frame(self.root, style="Panel.TFrame", width=340)
+        self.left_shell = left_shell
         left_shell.grid(row=0, column=0, sticky="nsew")
         left_shell.grid_propagate(False)
         left_shell.grid_rowconfigure(0, weight=1)
@@ -250,14 +277,16 @@ class CastelCredCamGUI:
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        ttk.Label(sidebar_content, text=APP_TITLE, style="Title.TLabel").pack(anchor="w", padx=18, pady=(18, 4))
-        tk.Label(
+        self.sidebar_title_label = ttk.Label(sidebar_content, text=APP_TITLE, style="Title.TLabel")
+        self.sidebar_title_label.pack(anchor="w", padx=18, pady=(18, 4))
+        self.sidebar_subtitle_label = tk.Label(
             sidebar_content,
             text="Captura por curso con estilo morado y dorado",
             bg=PANEL_BG,
             fg=ACCENT_GOLD,
             font=("Segoe UI", 10, "bold"),
-        ).pack(anchor="w", padx=20, pady=(0, 14))
+        )
+        self.sidebar_subtitle_label.pack(anchor="w", padx=20, pady=(0, 14))
 
         self._make_session_card(sidebar_content)
         self._make_roster_card(sidebar_content)
@@ -269,14 +298,20 @@ class CastelCredCamGUI:
         notebook.grid(row=0, column=0, sticky="nsew")
 
         capture_page = tk.Frame(notebook, bg=WINDOW_BG)
+        self.capture_page = capture_page
         capture_page.grid_rowconfigure(1, weight=1)
         capture_page.grid_columnconfigure(0, weight=1)
         notebook.add(capture_page, text="Captura")
 
         info_page = tk.Frame(notebook, bg=INFO_BG)
+        self.info_page = info_page
         notebook.add(info_page, text="Info")
 
-        tk.Label(
+        course_page = tk.Frame(notebook, bg=INFO_BG)
+        self.course_page = course_page
+        notebook.add(course_page, text="Curso")
+
+        self.session_title_label = tk.Label(
             capture_page,
             textvariable=self.session_var,
             bg=WINDOW_BG,
@@ -285,14 +320,17 @@ class CastelCredCamGUI:
             font=("Segoe UI", 13, "bold"),
             padx=8,
             pady=6,
-        ).grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        )
+        self.session_title_label.grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
         preview_card = tk.Frame(capture_page, bg=CARD_BG, highlightbackground="#4F2B74", highlightthickness=1)
+        self.preview_card = preview_card
         preview_card.grid(row=1, column=0, sticky="nsew")
         preview_card.grid_rowconfigure(1, weight=1)
         preview_card.grid_columnconfigure(0, weight=1)
 
         toolbar = tk.Frame(preview_card, bg="#20102F", padx=10, pady=8)
+        self.preview_toolbar = toolbar
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.grid_columnconfigure(1, weight=1)
 
@@ -310,6 +348,7 @@ class CastelCredCamGUI:
         ttk.Button(toolbar, text="Sig. cam", style="Gold.TButton", command=self.cycle_camera).grid(row=0, column=6, sticky="e")
 
         tool_row = tk.Frame(preview_card, bg="#180B25", padx=10, pady=6)
+        self.preview_tool_row = tool_row
         tool_row.grid(row=2, column=0, sticky="ew")
 
         tk.Label(tool_row, text="Zoom", bg="#180B25", fg=TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(side="left")
@@ -354,6 +393,7 @@ class CastelCredCamGUI:
             font=("Segoe UI", 10, "bold"),
         ).grid(row=2, column=0, sticky="ew", pady=(10, 0))
 
+        self._build_course_page(course_page)
         self._build_info_page(info_page)
 
     def _make_card(self, parent: tk.Widget, title: str) -> ttk.Frame:
@@ -373,18 +413,17 @@ class CastelCredCamGUI:
         ttk.Label(card, text="Curso", style="Muted.TLabel").pack(anchor="w", padx=14, pady=(10, 2))
         self.course_combo = ttk.Combobox(card, textvariable=self.course_var, state="normal")
         self.course_combo.pack(fill="x", padx=14, pady=(0, 8))
-        self.course_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_roster_preview(self.course_var.get()))
+        self.course_combo.bind("<<ComboboxSelected>>", lambda _event: self._handle_course_return())
         self.course_combo.bind("<Return>", self._handle_course_return)
         self.course_combo.bind("<KP_Enter>", self._handle_course_return)
         ttk.Button(card, text="Cargar lista", style="Gold.TButton", command=self.import_roster_file).pack(fill="x", padx=14, pady=(0, 8))
-        ttk.Label(card, textvariable=self.roster_path_var, style="Muted.TLabel", wraplength=280, justify="left").pack(
-            anchor="w", padx=14, pady=(0, 8)
-        )
+        self.roster_path_label = ttk.Label(card, textvariable=self.roster_path_var, style="Muted.TLabel", wraplength=280, justify="left")
+        self.roster_path_label.pack(anchor="w", padx=14, pady=(0, 8))
         ttk.Button(card, text="Iniciar sesion", style="Accent.TButton", command=self.start_session).pack(fill="x", padx=14, pady=(0, 14))
 
     def _make_roster_card(self, parent: tk.Widget) -> None:
         card = self._make_card(parent, "Lista de alumnos")
-        tk.Label(
+        self.roster_status_label = tk.Label(
             card,
             textvariable=self.roster_status_var,
             justify="left",
@@ -393,7 +432,8 @@ class CastelCredCamGUI:
             fg=TEXT_MUTED,
             font=("Segoe UI", 9),
             wraplength=300,
-        ).pack(fill="x", padx=14, pady=(0, 10))
+        )
+        self.roster_status_label.pack(fill="x", padx=14, pady=(0, 10))
 
         buttons = tk.Frame(card, bg=CARD_BG)
         buttons.pack(fill="x", padx=14, pady=(0, 6))
@@ -445,7 +485,7 @@ class CastelCredCamGUI:
 
     def _make_recent_card(self, parent: tk.Widget) -> None:
         card = self._make_card(parent, "Recientes")
-        tk.Label(
+        self.recent_label = tk.Label(
             card,
             textvariable=self.recent_var,
             justify="left",
@@ -454,7 +494,92 @@ class CastelCredCamGUI:
             fg=TEXT_MUTED,
             font=("Consolas", 9),
             wraplength=300,
-        ).pack(fill="x", padx=14, pady=(0, 14))
+        )
+        self.recent_label.pack(fill="x", padx=14, pady=(0, 14))
+
+    def _build_course_page(self, parent: tk.Widget) -> None:
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        header = tk.Frame(parent, bg=INFO_BG, padx=18, pady=16)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        self.course_total_var = tk.StringVar(value="0 alumnos")
+        self.course_current_var = tk.StringVar(value="Sin curso activo")
+        self.course_progress_var = tk.IntVar(value=0)
+        self.course_progress_text_var = tk.StringVar(value="0 capturados")
+
+        tk.Label(
+            header,
+            text="Lista completa del curso",
+            bg=INFO_BG,
+            fg=ACCENT_GOLD,
+            font=("Segoe UI", 18, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            header,
+            textvariable=self.course_current_var,
+            bg=INFO_BG,
+            fg=TEXT_PRIMARY,
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=1, column=0, sticky="w", pady=(6, 2))
+
+        progress_row = tk.Frame(header, bg=INFO_BG)
+        progress_row.grid(row=2, column=0, sticky="ew", pady=(10, 4))
+        progress_row.grid_columnconfigure(0, weight=1)
+        ttk.Progressbar(progress_row, maximum=100, variable=self.course_progress_var).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            progress_row,
+            textvariable=self.course_progress_text_var,
+            bg=INFO_BG,
+            fg=TEXT_MUTED,
+            font=("Segoe UI", 9),
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        tk.Label(
+            header,
+            textvariable=self.course_total_var,
+            bg=INFO_BG,
+            fg=TEXT_MUTED,
+            font=("Segoe UI", 10),
+        ).grid(row=3, column=0, sticky="w", pady=(2, 0))
+
+        table_frame = tk.Frame(parent, bg=INFO_BG, padx=18, pady=0)
+        table_frame.grid(row=1, column=0, sticky="nsew")
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+
+        columns = ("estado", "alumno", "rut")
+        self.course_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
+        self.course_tree.heading("estado", text="Estado")
+        self.course_tree.heading("alumno", text="Alumno")
+        self.course_tree.heading("rut", text="RUT")
+        self.course_tree.column("estado", width=110, anchor="center", stretch=False)
+        self.course_tree.column("alumno", width=420, anchor="w")
+        self.course_tree.column("rut", width=140, anchor="center", stretch=False)
+
+        tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.course_tree.yview)
+        self.course_tree.configure(yscrollcommand=tree_scroll.set)
+        self.course_tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll.grid(row=0, column=1, sticky="ns")
+
+        self.course_tree.tag_configure("done", background="#163022", foreground="#CFF9E0")
+        self.course_tree.tag_configure("current", background="#4E390B", foreground="#FFF0B0")
+        self.course_tree.tag_configure("pending", background="#241033", foreground=TEXT_MUTED)
+        self.course_tree.tag_configure("empty", background="#241033", foreground="#A89BBB")
+
+        footer = tk.Frame(parent, bg=INFO_BG, padx=18, pady=14)
+        footer.grid(row=2, column=0, sticky="ew")
+        footer.grid_columnconfigure(0, weight=1)
+        ttk.Button(footer, text="Actualizar lista", style="Gold.TButton", command=self._refresh_course_view).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(footer, text="Alinear con lista", style="Accent.TButton", command=self.sync_student_with_roster).grid(
+            row=0, column=1, sticky="e", padx=(8, 0)
+        )
+
+        self._refresh_course_view()
 
     def _bind_sidebar_mousewheel(self, canvas: tk.Canvas) -> None:
         def _is_within_sidebar(widget: Optional[tk.Misc]) -> bool:
@@ -480,6 +605,96 @@ class CastelCredCamGUI:
         self.root.bind_all("<MouseWheel>", _on_mousewheel, add="+")
         self.root.bind_all("<Shift-MouseWheel>", _on_mousewheel, add="+")
 
+    def _sync_responsive_layout(self, _event: Optional[tk.Event] = None) -> None:
+        if self.root is None:
+            return
+
+        width = max(0, self.root.winfo_width())
+        height = max(0, self.root.winfo_height())
+        if width <= 1 or height <= 1:
+            return
+        if self._last_layout_size == (width, height):
+            return
+        self._last_layout_size = (width, height)
+
+        sidebar_width = max(290, min(420, int(width * 0.28)))
+        if self.left_shell is not None:
+            self.left_shell.configure(width=sidebar_width)
+
+        title_size = 18 if width < 1300 else 20 if width < 1600 else 22
+        subtitle_size = 9 if width < 1300 else 10
+        session_size = 11 if width < 1300 else 13
+        info_size = 10 if width < 1300 else 11
+        tree_height = 11 if height < 820 else 14 if height < 950 else 16
+
+        self.style.configure("Title.TLabel", font=("Segoe UI", title_size, "bold"))
+        self.style.configure("Muted.TLabel", font=("Segoe UI", 8 if width < 1300 else 9))
+        self.style.configure("TRadiobutton", font=("Segoe UI", 9 if width < 1300 else 10))
+        self.style.configure("TCheckbutton", font=("Segoe UI", 9 if width < 1300 else 10))
+        self.style.configure("Treeview", rowheight=24 if width < 1300 else 28)
+        self.style.configure("Treeview.Heading", font=("Segoe UI", 9 if width < 1300 else 10, "bold"))
+
+        if self.sidebar_subtitle_label is not None:
+            self.sidebar_subtitle_label.configure(font=("Segoe UI", subtitle_size, "bold"))
+            self.sidebar_subtitle_label.configure(wraplength=max(220, sidebar_width - 40))
+        if hasattr(self, "roster_path_label"):
+            try:
+                self.roster_path_label.configure(wraplength=max(220, sidebar_width - 50))
+            except Exception:
+                pass
+        if hasattr(self, "roster_status_label"):
+            try:
+                self.roster_status_label.configure(wraplength=max(220, sidebar_width - 50))
+            except Exception:
+                pass
+        if hasattr(self, "recent_label"):
+            try:
+                self.recent_label.configure(wraplength=max(220, sidebar_width - 50))
+            except Exception:
+                pass
+
+        if self.session_title_label is not None:
+            self.session_title_label.configure(font=("Segoe UI", session_size, "bold"))
+
+        if self.info_text is not None:
+            self.info_text.configure(font=("Segoe UI", info_size))
+
+        if self.course_tree is not None:
+            tree_width = max(420, width - sidebar_width - 80)
+            estado_w = 90 if tree_width < 700 else 110
+            rut_w = 120 if tree_width < 700 else 140
+            alumno_w = max(260, tree_width - estado_w - rut_w - 40)
+            self.course_tree.column("estado", width=estado_w)
+            self.course_tree.column("alumno", width=alumno_w)
+            self.course_tree.column("rut", width=rut_w)
+            self.course_tree.configure(height=tree_height)
+
+        if hasattr(self, "preview_camera_combo"):
+            try:
+                self.preview_camera_combo.configure(width=26 if width < 1300 else 34)
+            except Exception:
+                pass
+        if hasattr(self, "camera_combo"):
+            try:
+                self.camera_combo.configure(width=28 if width < 1300 else 34)
+            except Exception:
+                pass
+
+        # Keep the preview toolbar usable when the window becomes narrow.
+        if self.preview_toolbar is not None:
+            for child in self.preview_toolbar.winfo_children():
+                try:
+                    child.configure(font=("Segoe UI", 9 if width < 1300 else 10))
+                except Exception:
+                    pass
+
+        if self.preview_tool_row is not None:
+            for child in self.preview_tool_row.winfo_children():
+                try:
+                    child.configure(font=("Segoe UI", 8 if width < 1300 else 9))
+                except Exception:
+                    pass
+
     def _build_info_page(self, parent: tk.Widget) -> None:
         parent.grid_rowconfigure(0, weight=1)
         parent.grid_columnconfigure(0, weight=1)
@@ -494,6 +709,7 @@ class CastelCredCamGUI:
             pady=18,
             insertbackground=ACCENT_GOLD,
         )
+        self.info_text = info
         info.grid(row=0, column=0, sticky="nsew")
         info.insert(
             "1.0",
@@ -695,6 +911,7 @@ class CastelCredCamGUI:
             self.course_var.set(resolved)
 
         self._update_roster_preview(resolved)
+        self._refresh_course_view()
         self.status_var.set(f"Lista lista: {path.name}. Elige curso y arranca la sesion.")
 
     def _resolve_roster_course(self, course_name: str) -> str:
@@ -725,6 +942,7 @@ class CastelCredCamGUI:
         students = self.roster_map.get(resolved, [])
         if not students:
             self.roster_status_var.set(f"{resolved}\nSin alumnos cargados.")
+            self._refresh_course_view()
             return
 
         preview_index = self.roster_preview_index.get(resolved, 0)
@@ -735,6 +953,7 @@ class CastelCredCamGUI:
         self.roster_status_var.set(
             f"{resolved}\nAlumno {preview_index + 1} de {len(students)}\nSiguiente: {next_student.display_name}\nRUT: {next_student.rut}"
         )
+        self._refresh_course_view()
 
     def _sync_session_student_from_roster(self) -> None:
         if self.session is None or not self.session.has_roster:
@@ -748,6 +967,7 @@ class CastelCredCamGUI:
         self.student_var.set(student.display_name)
         self._update_roster_session_label()
         self._refresh_student_card_mode()
+        self._refresh_course_view()
 
     def _refresh_student_card_mode(self) -> None:
         manual_mode = self.session is None or not self.session.has_roster
@@ -773,6 +993,7 @@ class CastelCredCamGUI:
     def _update_roster_session_label(self) -> None:
         if self.session is None or not self.session.has_roster:
             self.roster_status_var.set("Lista cargada.\nLa captura secuencial queda lista al iniciar la sesión.")
+            self._refresh_course_view()
             return
         student = self.session.current_roster_student()
         if student is None:
@@ -781,12 +1002,101 @@ class CastelCredCamGUI:
         self.roster_status_var.set(
             f"{self.session.course_display}\nActual: {student.display_name}\nRUT: {student.rut}\nPendientes: {self.session.roster_remaining}"
         )
+        self._refresh_course_view()
+
+    def _active_roster_course(self) -> str:
+        if self.session is not None and self.session.has_roster:
+            return self.session.course_display
+        resolved = self._resolve_roster_course(self.course_var.get().strip())
+        if resolved:
+            return resolved
+        if len(self.roster_map) == 1:
+            return next(iter(self.roster_map))
+        return ""
+
+    def _student_is_completed(self, student: RosterStudent) -> bool:
+        if self.session is None:
+            return False
+        student_name_key = _normalize_key(student.display_name)
+        student_rut_key = _normalize_rut_key(student.rut)
+        for record in self.session.records:
+            if student_rut_key and _normalize_rut_key(getattr(record, "rut", "")) == student_rut_key:
+                return True
+            if _normalize_key(record.student_name) == student_name_key:
+                return True
+        return False
+
+    def _refresh_course_view(self) -> None:
+        if self.course_tree is None:
+            return
+
+        for item in self.course_tree.get_children():
+            self.course_tree.delete(item)
+
+        course_name = self._active_roster_course()
+        if not self.roster_map:
+            self.course_current_var.set("Carga una lista para ver el curso completo.")
+            self.course_total_var.set("0 alumnos")
+            self.course_progress_text_var.set("0 capturados")
+            self.course_progress_var.set(0)
+            self.course_tree.insert("", "end", values=("Vacío", "Carga una lista primero", ""), tags=("empty",))
+            return
+
+        if not course_name:
+            total = sum(len(items) for items in self.roster_map.values())
+            self.course_current_var.set(f"{len(self.roster_map)} cursos cargados | {total} alumnos")
+            self.course_total_var.set("Selecciona un curso para ver el detalle.")
+            self.course_progress_text_var.set("Sin curso activo")
+            self.course_progress_var.set(0)
+            self.course_tree.insert("", "end", values=("Selecciona", "un curso en el campo Curso", ""), tags=("empty",))
+            return
+
+        students = self.roster_map.get(course_name, [])
+        total = len(students)
+        completed = sum(1 for student in students if self._student_is_completed(student))
+        remaining = max(0, total - completed)
+        current_student = None
+        if self.session is not None and self.session.has_roster:
+            current_student = self.session.current_roster_student()
+        elif students:
+            preview_index = self.roster_preview_index.get(course_name, 0)
+            preview_index = max(0, min(preview_index, len(students) - 1))
+            current_student = students[preview_index]
+
+        self.course_current_var.set(f"{course_name} | {completed} capturados | {remaining} pendientes")
+        self.course_total_var.set(f"{total} alumnos en la nómina")
+        self.course_progress_text_var.set(f"{completed} capturados de {total}")
+        self.course_progress_var.set(0 if total == 0 else int((completed / total) * 100))
+
+        if not students:
+            self.course_tree.insert("", "end", values=("Vacío", "Sin alumnos cargados", ""), tags=("empty",))
+            return
+
+        current_key = _normalize_rut_key(current_student.rut) if current_student is not None else ""
+        for index, student in enumerate(students, start=1):
+            completed_flag = self._student_is_completed(student)
+            if completed_flag:
+                status = "Hecho"
+                tag = "done"
+            elif current_student is not None and _normalize_rut_key(student.rut) == current_key:
+                status = "Actual"
+                tag = "current"
+            else:
+                status = "Pendiente"
+                tag = "pending"
+            self.course_tree.insert(
+                "",
+                "end",
+                values=(status, f"{index:03d}. {student.display_name}", student.rut),
+                tags=(tag,),
+            )
 
     def next_roster_student(self) -> None:
         if self.session is not None and self.session.has_roster:
             self.session.advance_roster()
             self._sync_session_student_from_roster()
             self.status_var.set("Siguiente alumno.")
+            self._refresh_course_view()
             return
 
         course_name = self._resolve_roster_course(self.course_var.get().strip())
@@ -802,12 +1112,14 @@ class CastelCredCamGUI:
         self.roster_preview_index[course_name] = current_index
         self._update_roster_preview(course_name)
         self.status_var.set(f"Vista previa en {current_index + 1} de {len(students)}.")
+        self._refresh_course_view()
 
     def prev_roster_student(self) -> None:
         if self.session is not None and self.session.has_roster:
             self.session.retreat_roster()
             self._sync_session_student_from_roster()
             self.status_var.set("Alumno anterior.")
+            self._refresh_course_view()
             return
 
         course_name = self._resolve_roster_course(self.course_var.get().strip())
@@ -823,11 +1135,13 @@ class CastelCredCamGUI:
         self.roster_preview_index[course_name] = current_index
         self._update_roster_preview(course_name)
         self.status_var.set(f"Vista previa en {current_index + 1} de {len(students)}.")
+        self._refresh_course_view()
 
     def sync_student_with_roster(self) -> None:
         if self.session is not None and self.session.has_roster:
             self._sync_session_student_from_roster()
             self.status_var.set("Alumno alineado con la lista.")
+            self._refresh_course_view()
             return
 
         course_name = self._resolve_roster_course(self.course_var.get().strip())
@@ -839,6 +1153,7 @@ class CastelCredCamGUI:
         self.roster_preview_index[course_name] = 0
         self._update_roster_preview(course_name)
         self.status_var.set("Vista previa alineada con el primer alumno.")
+        self._refresh_course_view()
 
     def _handle_student_return(self, _event=None):
         self.capture_photo()
@@ -846,6 +1161,7 @@ class CastelCredCamGUI:
 
     def _handle_course_return(self, _event=None):
         self._update_roster_preview(self.course_var.get())
+        self._refresh_course_view()
         return "break"
 
     def _handle_global_return(self, _event=None):
@@ -1276,6 +1592,7 @@ class CastelCredCamGUI:
         self._sync_session_student_from_roster()
         self._refresh_student_card_mode()
         self._update_roster_session_label()
+        self._refresh_course_view()
         self._refresh_recent()
         open_folder(photos_root)
 
@@ -1340,6 +1657,7 @@ class CastelCredCamGUI:
             self.student_var.set("")
         self.status_var.set(f"Guardada: {filename} | {student_name} | {backup_status}")
         self._update_roster_session_label()
+        self._refresh_course_view()
         self._refresh_recent()
 
     def retake_last(self) -> None:
@@ -1366,6 +1684,7 @@ class CastelCredCamGUI:
             self.student_var.set(record.student_name)
         self.status_var.set(f"Rehecha la ultima captura. Nombre restaurado: {record.student_name}")
         self._update_roster_session_label()
+        self._refresh_course_view()
         self._refresh_recent()
 
     def close_session(self) -> None:
@@ -1377,6 +1696,7 @@ class CastelCredCamGUI:
         self.student_var.set("")
         self._refresh_student_card_mode()
         self._update_roster_preview(self.course_var.get())
+        self._refresh_course_view()
         self._refresh_recent()
 
     def open_photos_root(self) -> None:
