@@ -1571,7 +1571,7 @@ class CastelCredCamQt(QMainWindow):
         current = self._current_student()
         student = current.display_name if current is not None else "-"
         rut = current.rut if current is not None and current.rut else "-"
-        mode_text = "Curso" if self.mode_radio_course_checked() else "Prueba"
+        mode_text = "Curso" if self.course_radio.isChecked() else "Prueba"
         status = "Vista previa"
         if self.session is not None:
             status = f"{len(self.session.records)} capturados | {self.session.roster_remaining} pendientes"
@@ -1583,9 +1583,6 @@ class CastelCredCamQt(QMainWindow):
             f"RUT: {rut}",
             status,
         ]
-
-    def _mode_radio_course_checked(self) -> bool:
-        return self.course_radio.isChecked()
 
     def _draw_guides(self, frame: np.ndarray) -> None:
         height, width = frame.shape[:2]
