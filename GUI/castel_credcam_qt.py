@@ -276,13 +276,23 @@ class CameraThread(QThread):
                 self._capture.read()
 
             self.camera_message.emit(f"Camara activa {self.camera_index}")
+            frame_count = 0
+            fail_count = 0
             while not self.isInterruptionRequested():
                 ok, frame = self._capture.read()
                 if not ok or frame is None:
-                    self.camera_message.emit("No se pudo leer la camara. Reintentando...")
+                    fail_count += 1
+                    if fail_count == 1 or fail_count % 25 == 0:
+                        self.camera_message.emit(
+                            f"Esperando frames... intento {fail_count} en camara {self.camera_index}"
+                        )
                     self.msleep(120)
                     continue
-                self.frame_ready.emit(frame)
+                fail_count = 0
+                frame_count += 1
+                if frame_count == 1 or frame_count % 60 == 0:
+                    self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
+                self.frame_ready.emit(frame.copy())
                 self.msleep(25)
         except Exception as exc:
             self.camera_error.emit(str(exc))
@@ -329,6 +339,10 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer = QTimer(self)
         self.countdown_timer.setInterval(1000)
         self.countdown_timer.timeout.connect(self._countdown_tick)
+        self.first_frame_timer = QTimer(self)
+        self.first_frame_timer.setSingleShot(True)
+        self.first_frame_timer.timeout.connect(self._on_first_frame_timeout)
+        self._preview_frame_received = False
 
         self.roster_source_path: Optional[Path] = None
         self.roster_status_text = "Carga una lista para avanzar por curso."
@@ -862,12 +876,16 @@ class CastelCredCamQt(QMainWindow):
             self._show_preview_message("No hay camara disponible.")
             return
         self._stop_camera_thread()
+        self._preview_frame_received = False
         self.camera_thread = CameraThread(self.camera_index, self.backend_id, self)
         self.camera_thread.frame_ready.connect(self._on_frame_ready)
         self.camera_thread.camera_message.connect(self._on_camera_message)
         self.camera_thread.camera_error.connect(self._on_camera_error)
         self.camera_thread.start()
         self.logger.info("Camera thread started index=%s backend=%s", self.camera_index, self.backend_name)
+        self.status_label.setText("Esperando primer frame de camara...")
+        self._show_preview_message("Esperando primer frame...")
+        self.first_frame_timer.start(6000)
 
     def _stop_camera_thread(self) -> None:
         if self.camera_thread is None:
@@ -878,6 +896,7 @@ class CastelCredCamQt(QMainWindow):
         except Exception:
             pass
         self.camera_thread = None
+        self.first_frame_timer.stop()
 
     def _on_camera_message(self, message: str) -> None:
         self.logger.info("Camera: %s", message)
@@ -1599,7 +1618,7 @@ class CastelCredCamQt(QMainWindow):
 
     def _render_preview(self) -> None:
         if self.latest_frame is None:
-            self._show_preview_message("Sin señal de camara")
+            self._show_preview_message("Esperando señal de camara...")
             return
         frame = self._apply_settings_to_frame(self.latest_frame, for_preview=True)
 
@@ -1654,8 +1673,28 @@ class CastelCredCamQt(QMainWindow):
         except Exception:
             self.latest_frame = frame
         self.frame_counter += 1
+        if not self._preview_frame_received:
+            self._preview_frame_received = True
+            self.first_frame_timer.stop()
+            self.logger.info("First preview frame received. shape=%s", getattr(self.latest_frame, "shape", None))
         if self.tabs.currentWidget() == self.capture_tab or self.countdown_remaining > 0:
-            self._render_preview()
+            try:
+                self._render_preview()
+            except Exception as exc:
+                self.logger.exception("Preview render failed: %s", exc)
+                self._show_preview_message(f"Error al renderizar vista: {exc}")
+
+    def _on_first_frame_timeout(self) -> None:
+        if self._preview_frame_received:
+            return
+        self.logger.warning(
+            "No preview frames received after timeout. camera_index=%s backend=%s alias=%s",
+            self.camera_index,
+            self.backend_name,
+            self.camera_alias,
+        )
+        self.status_label.setText("La camara abre, pero aun no entrega imagen.")
+        self._show_preview_message("La camara abre, pero no entrega imagen")
 
     def _current_capture_student(self) -> tuple[str, str]:
         if self.session and self.session.has_roster:
