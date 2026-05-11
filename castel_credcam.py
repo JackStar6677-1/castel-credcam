@@ -27,6 +27,7 @@ TEST_FOLDER_NAME = "_pruebas"
 CSV_FILENAME = "index.csv"
 MAX_CAMERA_INDEX = 8
 WARMUP_FRAMES = 12
+CAMERA_RESOLUTION_FILENAME = "camera_resolution.json"
 CAMERA_BACKENDS = [
     ("DirectShow", cv2.CAP_DSHOW),
     ("MediaFoundation", cv2.CAP_MSMF),
@@ -44,10 +45,11 @@ TEXT_THICKNESS = 1
 TEXT_LINE = 21
 PREFERRED_CAMERA_RESOLUTIONS = [
     (1280, 720),
-    (1920, 1080),
     (960, 540),
-    (800, 600),
+    (1280, 960),
+    (1920, 1080),
     (640, 480),
+    (640, 360),
 ]
 CAMERA_ALIASES_FILENAME = "camera_aliases.json"
 LAST_CAMERA_FILENAME = "last_camera.json"
@@ -165,6 +167,57 @@ def load_last_camera(app_dir: Path) -> tuple[Optional[int], Optional[str]]:
 def save_last_camera(app_dir: Path, index: int, backend_key: str) -> None:
     path = app_dir / LAST_CAMERA_FILENAME
     payload = {"index": index, "backend": backend_key}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _camera_resolution_key(index: int, backend_key: str) -> str:
+    return f"{index}:{backend_key.lower()}"
+
+
+def load_camera_resolution(app_dir: Path, index: int, backend_key: str) -> Optional[tuple[int, int]]:
+    path = app_dir / CAMERA_RESOLUTION_FILENAME
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    item = payload.get(_camera_resolution_key(index, backend_key))
+    if not isinstance(item, dict):
+        return None
+    try:
+        width = int(item.get("width"))
+        height = int(item.get("height"))
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def save_camera_resolution(app_dir: Path, index: int, backend_key: str, resolution: Optional[tuple[int, int]]) -> None:
+    path = app_dir / CAMERA_RESOLUTION_FILENAME
+    payload: dict[str, dict[str, int]] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = {
+                    key: value
+                    for key, value in loaded.items()
+                    if isinstance(key, str) and isinstance(value, dict)
+                }
+        except Exception:
+            payload = {}
+
+    key = _camera_resolution_key(index, backend_key)
+    if resolution is None:
+        payload.pop(key, None)
+    else:
+        width, height = resolution
+        payload[key] = {"width": int(width), "height": int(height)}
+
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -380,16 +433,23 @@ def open_camera(index: int, backend: int = cv2.CAP_ANY) -> cv2.VideoCapture:
         return cv2.VideoCapture(index, backend)
 
 
-def configure_capture(capture: cv2.VideoCapture) -> tuple[int, int]:
+def configure_capture(
+    capture: cv2.VideoCapture,
+    preferred_resolution: Optional[tuple[int, int]] = None,
+) -> tuple[int, int]:
     if sys.platform.startswith("win"):
         try:
             capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         except Exception:
             pass
 
+    preferred_sequence = list(PREFERRED_CAMERA_RESOLUTIONS)
+    if preferred_resolution is not None:
+        preferred_sequence = [preferred_resolution] + [item for item in preferred_sequence if item != preferred_resolution]
+
     actual_width = 0
     actual_height = 0
-    for target_width, target_height in PREFERRED_CAMERA_RESOLUTIONS:
+    for target_width, target_height in preferred_sequence:
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
         capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)

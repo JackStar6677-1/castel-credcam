@@ -24,3 +24,4 @@ Desktop.ini
 *.log
 logs/
 last_camera.json
+camera_resolution.json

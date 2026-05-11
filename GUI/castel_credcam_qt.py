@@ -60,6 +60,7 @@ from castel_credcam import (  # noqa: E402
     get_logs_dir,
     list_available_cameras,
     load_camera_aliases,
+    load_camera_resolution,
     load_existing_records,
     load_last_camera,
     open_camera,
@@ -67,6 +68,7 @@ from castel_credcam import (  # noqa: E402
     rewrite_csv,
     sanitize_folder_name,
     save_last_camera,
+    save_camera_resolution,
     setup_logging,
     silence_opencv_logs,
 )
@@ -89,6 +91,15 @@ DANGER = "#FF8092"
 DONE_BG = "#183122"
 CURRENT_BG = "#584010"
 PENDING_BG = "#2B1640"
+COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
+    (1280, 720),
+    (960, 540),
+    (1280, 960),
+    (1920, 1080),
+    (640, 480),
+    (640, 360),
+]
+RESOLUTION_AUTO_LABEL = "Automatico"
 
 
 def _normalize_text(value: object) -> str:
@@ -256,10 +267,17 @@ class CameraThread(QThread):
     camera_message = Signal(str)
     camera_error = Signal(str)
 
-    def __init__(self, camera_index: int, backend_id: int, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        camera_index: int,
+        backend_id: int,
+        preferred_resolution: Optional[tuple[int, int]] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.camera_index = camera_index
         self.backend_id = backend_id
+        self.preferred_resolution = preferred_resolution
         self._capture: Optional[cv2.VideoCapture] = None
 
     def run(self) -> None:
@@ -269,7 +287,7 @@ class CameraThread(QThread):
                 self.camera_error.emit(f"No se pudo abrir la camara {self.camera_index}.")
                 return
 
-            requested_width, requested_height = configure_capture(self._capture)
+            requested_width, requested_height = configure_capture(self._capture, self.preferred_resolution)
             for _ in range(8):
                 if self.isInterruptionRequested():
                     return
@@ -336,6 +354,7 @@ class CastelCredCamQt(QMainWindow):
         self.backend_id = cv2.CAP_ANY
         self.backend_name = "Automatico"
         self.camera_alias = ""
+        self.camera_resolution: Optional[tuple[int, int]] = None
         self.camera_thread: Optional[CameraThread] = None
         self.latest_frame: Optional[np.ndarray] = None
         self.frame_counter = 0
@@ -351,6 +370,10 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer = QTimer(self)
         self.countdown_timer.setInterval(1000)
         self.countdown_timer.timeout.connect(self._countdown_tick)
+        self.preview_render_timer = QTimer(self)
+        self.preview_render_timer.setSingleShot(True)
+        self.preview_render_timer.setInterval(33)
+        self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
         self.first_frame_timer.timeout.connect(self._on_first_frame_timeout)
@@ -611,6 +634,11 @@ class CastelCredCamQt(QMainWindow):
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
         camera_layout.addWidget(self.camera_combo)
 
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.currentIndexChanged.connect(self._on_resolution_selected)
+        camera_layout.addWidget(self._muted_label("Resolucion"))
+        camera_layout.addWidget(self.resolution_combo)
+
         self.mirror_check = QCheckBox("Espejo horizontal")
         self.face_check = QCheckBox("Ayuda visual de rostro")
         self.guide_check = QCheckBox("Mostrar guia")
@@ -850,6 +878,33 @@ class CastelCredCamQt(QMainWindow):
         else:
             self.logger.warning("No cameras detected at startup.")
 
+        self.resolution_combo.blockSignals(True)
+        self.resolution_combo.clear()
+        self.resolution_combo.addItem(RESOLUTION_AUTO_LABEL, None)
+        for width, height in COMMON_CAMERA_RESOLUTIONS:
+            self.resolution_combo.addItem(f"{width} x {height}", (width, height))
+        self.resolution_combo.setCurrentIndex(0)
+        self.resolution_combo.blockSignals(False)
+
+    def _resolution_label(self, resolution: Optional[tuple[int, int]]) -> str:
+        if resolution is None:
+            return RESOLUTION_AUTO_LABEL
+        width, height = resolution
+        return f"{width} x {height}"
+
+    def _resolution_from_combo_index(self, combo_index: int) -> Optional[tuple[int, int]]:
+        if combo_index < 0:
+            return None
+        data = self.resolution_combo.itemData(combo_index)
+        if isinstance(data, tuple) and len(data) == 2:
+            width, height = data
+            if int(width) > 0 and int(height) > 0:
+                return int(width), int(height)
+        return None
+
+    def _current_selected_resolution(self) -> Optional[tuple[int, int]]:
+        return self._resolution_from_combo_index(self.resolution_combo.currentIndex())
+
     def _select_default_camera(self) -> None:
         if not self.camera_choices:
             return
@@ -871,6 +926,28 @@ class CastelCredCamQt(QMainWindow):
         self._apply_selected_camera(selected)
         self._start_camera_thread()
 
+    def _sync_resolution_combo(self, block_signals: bool = False) -> None:
+        if not self.camera_choices:
+            return
+        if block_signals:
+            self.resolution_combo.blockSignals(True)
+        try:
+            preferred = load_camera_resolution(APP_ROOT, self.camera_index, backend_key_from_id(self.backend_id))
+            target_index = 0
+            if preferred is not None:
+                for i in range(self.resolution_combo.count()):
+                    if self._resolution_from_combo_index(i) == preferred:
+                        target_index = i
+                        break
+            self.camera_resolution = preferred
+            self.resolution_combo.setCurrentIndex(target_index)
+            self.status_label.setText(
+                f"Camara lista: {self.camera_alias} | {self.backend_name} | {self._resolution_label(preferred)}"
+            )
+        finally:
+            if block_signals:
+                self.resolution_combo.blockSignals(False)
+
     def _apply_selected_camera(self, combo_index: int) -> None:
         if combo_index < 0 or combo_index >= len(self.camera_choices):
             return
@@ -880,8 +957,8 @@ class CastelCredCamQt(QMainWindow):
         self.backend_name = backend_name
         self.camera_alias = alias
         save_last_camera(APP_ROOT, index, backend_key_from_id(backend_id))
-        self.status_label.setText(f"Camara lista: {alias} | {backend_name}")
         self.logger.info("Camera selected index=%s backend=%s alias=%s", index, backend_name, alias)
+        self._sync_resolution_combo(block_signals=True)
 
     def _start_camera_thread(self) -> None:
         if not self.camera_choices:
@@ -892,13 +969,27 @@ class CastelCredCamQt(QMainWindow):
             self.status_label.setText("La camara sigue cerrando. Intenta de nuevo en unos segundos.")
             return
         self._preview_frame_received = False
-        self.camera_thread = CameraThread(self.camera_index, self.backend_id, self)
+        selected_resolution = self._current_selected_resolution()
+        self.camera_resolution = selected_resolution
+        save_camera_resolution(
+            APP_ROOT,
+            self.camera_index,
+            backend_key_from_id(self.backend_id),
+            selected_resolution,
+        )
+        self.camera_thread = CameraThread(self.camera_index, self.backend_id, selected_resolution, self)
         self.camera_thread.frame_ready.connect(self._on_frame_ready)
         self.camera_thread.camera_message.connect(self._on_camera_message)
         self.camera_thread.camera_error.connect(self._on_camera_error)
         self.camera_thread.start()
-        self.logger.info("Camera thread started index=%s backend=%s", self.camera_index, self.backend_name)
-        self.status_label.setText("Esperando primer frame de camara...")
+        self.logger.info(
+            "Camera thread started index=%s backend=%s resolution=%s",
+            self.camera_index,
+            self.backend_name,
+            selected_resolution,
+        )
+        resolution_label = self._resolution_label(selected_resolution)
+        self.status_label.setText(f"Esperando primer frame de camara... | {resolution_label}")
         self._show_preview_message("Esperando primer frame...")
         self.first_frame_timer.start(6000)
 
@@ -956,13 +1047,31 @@ class CastelCredCamQt(QMainWindow):
         self._apply_selected_camera(combo_index)
         self._start_camera_thread()
 
+    def _on_resolution_selected(self) -> None:
+        if not self.camera_choices:
+            return
+        if self.resolution_combo.currentIndex() < 0:
+            return
+        self.camera_resolution = self._current_selected_resolution()
+        save_camera_resolution(
+            APP_ROOT,
+            self.camera_index,
+            backend_key_from_id(self.backend_id),
+            self.camera_resolution,
+        )
+        self.status_label.setText(
+            f"Resolucion seleccionada: {self._resolution_label(self.camera_resolution)}"
+        )
+        if self.camera_thread is not None:
+            self._start_camera_thread()
+
     def _on_tab_changed(self, index: int) -> None:
         tab = self.tabs.tabText(index)
         self.logger.info("Notebook tab changed: %s", tab)
         if tab == "Curso":
             self._refresh_course_view(force=True)
         elif tab == "Captura":
-            self._render_preview()
+            self._schedule_preview_render(immediate=True)
 
     def _active_course_text(self) -> str:
         if self.session is not None:
@@ -1633,12 +1742,28 @@ class CastelCredCamQt(QMainWindow):
             return self.current_face_box
         if self.face_cascade.empty():
             return None
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        height, width = frame.shape[:2]
+        detection_scale = 1.0
+        detect_frame = frame
+        if width > 640:
+            detection_scale = 640 / width
+            detect_width = 640
+            detect_height = max(1, int(height * detection_scale))
+            detect_frame = cv2.resize(frame, (detect_width, detect_height), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=6, minSize=(80, 80))
         if len(faces) == 0:
             self.current_face_box = None
             return None
         face = max(faces, key=lambda item: item[2] * item[3])
+        if detection_scale != 1.0:
+            fx, fy, fw, fh = face
+            face = (
+                int(fx / detection_scale),
+                int(fy / detection_scale),
+                int(fw / detection_scale),
+                int(fh / detection_scale),
+            )
         self.current_face_box = tuple(int(v) for v in face)
         return self.current_face_box
 
@@ -1704,11 +1829,23 @@ class CastelCredCamQt(QMainWindow):
             self.first_frame_timer.stop()
             self.logger.info("First preview frame received. shape=%s", getattr(self.latest_frame, "shape", None))
         if self.tabs.currentWidget() == self.capture_tab or self.countdown_remaining > 0:
-            try:
-                self._render_preview()
-            except Exception as exc:
-                self.logger.exception("Preview render failed: %s", exc)
-                self._show_preview_message(f"Error al renderizar vista: {exc}")
+            self._schedule_preview_render()
+
+    def _schedule_preview_render(self, immediate: bool = False) -> None:
+        if self.preview_render_timer.isActive():
+            if immediate:
+                self.preview_render_timer.stop()
+            else:
+                return
+        delay_ms = 1 if immediate else 33
+        self.preview_render_timer.start(delay_ms)
+
+    def _render_preview_safe(self) -> None:
+        try:
+            self._render_preview()
+        except Exception as exc:
+            self.logger.exception("Preview render failed: %s", exc)
+            self._show_preview_message(f"Error al renderizar vista: {exc}")
 
     def _on_first_frame_timeout(self) -> None:
         if self._preview_frame_received:
@@ -1803,7 +1940,7 @@ class CastelCredCamQt(QMainWindow):
             self.countdown_remaining = countdown
             self.status_label.setText(f"Captura en {self.countdown_remaining}s")
             self.countdown_timer.start()
-            self._render_preview()
+            self._schedule_preview_render(immediate=True)
             return
 
         self._save_capture(self.latest_frame.copy())
@@ -1817,7 +1954,7 @@ class CastelCredCamQt(QMainWindow):
             return
         self.countdown_remaining -= 1
         self.status_label.setText(f"Captura en {self.countdown_remaining}s")
-        self._render_preview()
+        self._schedule_preview_render(immediate=True)
 
     def retake_last(self) -> None:
         if self.session is None or not self.session.records:
@@ -1902,7 +2039,7 @@ class CastelCredCamQt(QMainWindow):
 
     def _on_resize(self) -> None:
         if self.tabs.currentWidget() == self.capture_tab:
-            self._render_preview()
+            self._schedule_preview_render(immediate=True)
 
     def prev_camera(self) -> None:
         if not self.camera_choices:
