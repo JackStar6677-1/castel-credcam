@@ -269,13 +269,17 @@ class CameraThread(QThread):
                 self.camera_error.emit(f"No se pudo abrir la camara {self.camera_index}.")
                 return
 
-            configure_capture(self._capture)
+            requested_width, requested_height = configure_capture(self._capture)
             for _ in range(8):
                 if self.isInterruptionRequested():
                     return
                 self._capture.read()
 
-            self.camera_message.emit(f"Camara activa {self.camera_index}")
+            actual_width = int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH) or requested_width or 0)
+            actual_height = int(self._capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or requested_height or 0)
+            self.camera_message.emit(
+                f"Camara activa {self.camera_index} ({actual_width}x{actual_height})"
+            )
             frame_count = 0
             fail_count = 0
             while not self.isInterruptionRequested():

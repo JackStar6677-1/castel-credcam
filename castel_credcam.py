@@ -42,6 +42,13 @@ TEXT_FONT = cv2.FONT_HERSHEY_SIMPLEX
 TEXT_SCALE = 0.58
 TEXT_THICKNESS = 1
 TEXT_LINE = 21
+PREFERRED_CAMERA_RESOLUTIONS = [
+    (1280, 720),
+    (1920, 1080),
+    (960, 540),
+    (800, 600),
+    (640, 480),
+]
 CAMERA_ALIASES_FILENAME = "camera_aliases.json"
 LAST_CAMERA_FILENAME = "last_camera.json"
 LOGS_DIRNAME = "logs"
@@ -373,14 +380,35 @@ def open_camera(index: int, backend: int = cv2.CAP_ANY) -> cv2.VideoCapture:
         return cv2.VideoCapture(index, backend)
 
 
-def configure_capture(capture: cv2.VideoCapture) -> None:
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+def configure_capture(capture: cv2.VideoCapture) -> tuple[int, int]:
+    if sys.platform.startswith("win"):
+        try:
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        except Exception:
+            pass
+
+    actual_width = 0
+    actual_height = 0
+    for target_width, target_height in PREFERRED_CAMERA_RESOLUTIONS:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
+        capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+        try:
+            capture.set(cv2.CAP_PROP_FPS, 30)
+        except Exception:
+            pass
+
+        actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if actual_width == target_width and actual_height == target_height:
+            break
+
     capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
     try:
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
         pass
+    return actual_width, actual_height
 
 
 def frame_stats(frame) -> Tuple[float, float]:
@@ -406,13 +434,19 @@ def try_open_camera(index: int) -> Tuple[Optional[cv2.VideoCapture], Optional[st
             capture.release()
             continue
 
-        configure_capture(capture)
+        actual_width, actual_height = configure_capture(capture)
         frame = None
         ok = False
         for _ in range(6):
             with suppress_native_stderr():
                 ok, frame = capture.read()
             if ok and frame is not None and frame_looks_usable(frame):
+                if actual_width <= 0 or actual_height <= 0:
+                    actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                    actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                if frame.shape[1] != actual_width or frame.shape[0] != actual_height:
+                    actual_width = frame.shape[1]
+                    actual_height = frame.shape[0]
                 return capture, backend_name, backend_id
 
         capture.release()
@@ -731,9 +765,12 @@ def run_capture_loop(
     if not capture.isOpened():
         raise RuntimeError(f"No se pudo abrir la camara con indice {camera_index}.")
 
-    configure_capture(capture)
+    requested_width, requested_height = configure_capture(capture)
     warm_up_camera(capture)
+    actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or requested_width or 0)
+    actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or requested_height or 0)
     camera_label = f"Camara: {camera_alias} | indice {camera_index} | backend: {backend_name}"
+    print(f"Resolucion activa: {actual_width}x{actual_height}")
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, 1280, 720)
