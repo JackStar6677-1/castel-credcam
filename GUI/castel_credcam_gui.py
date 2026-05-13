@@ -506,7 +506,9 @@ class CastelCredCamGUI:
 
         buttons2 = tk.Frame(card, bg=CARD_BG)
         buttons2.pack(fill="x", padx=14, pady=(0, 14))
-        ttk.Button(buttons2, text="Rehacer ultima", style="Gold.TButton", command=self.retake_last).pack(side="left", fill="x", expand=True)
+        ttk.Button(buttons2, text="Volver atras y reintentar", style="Gold.TButton", command=self.retake_last).pack(
+            side="left", fill="x", expand=True
+        )
         ttk.Button(buttons2, text="Cerrar sesion", style="Danger.TButton", command=self.close_session).pack(side="left", fill="x", expand=True, padx=(8, 0))
 
     def _make_recent_card(self, parent: tk.Widget) -> None:
@@ -1848,6 +1850,16 @@ class CastelCredCamGUI:
             messagebox.showinfo(APP_TITLE, "No hay capturas para rehacer.")
             return
 
+        if self.session.has_roster:
+            current = self.session.current_roster_student()
+            current_name = current.display_name if current is not None else "el ultimo alumno"
+            confirm = messagebox.askyesno(
+                APP_TITLE,
+                f"Se borrara la ultima captura y volveras a {current_name} para un nuevo intento.\n\nQuieres seguir?",
+            )
+            if not confirm:
+                return
+
         record = self.session.records.pop()
         image_path = self.session.session_dir / record.filename
         if image_path.exists():
@@ -1862,13 +1874,16 @@ class CastelCredCamGUI:
         if self.session.has_roster:
             self.session.retreat_roster()
             self._sync_session_student_from_roster()
+            restored_student = self.session.current_roster_student()
+            restored_name = restored_student.display_name if restored_student is not None else record.student_name
         else:
             self.student_var.set(record.student_name)
-        self.status_var.set(f"Rehecha la ultima captura. Nombre restaurado: {record.student_name}")
+            restored_name = record.student_name
+        self.status_var.set(f"Volviste atras. Listo para reintentar con: {restored_name}")
         self._update_roster_session_label()
         self._refresh_course_view()
         self._refresh_recent()
-        self.logger.info("Retake completed. Removed=%s restored_student=%s", record.filename, record.student_name)
+        self.logger.info("Retake completed. Removed=%s restored_student=%s", record.filename, restored_name)
 
     def close_session(self) -> None:
         if self.session is None:
