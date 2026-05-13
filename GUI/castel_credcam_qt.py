@@ -92,10 +92,10 @@ DONE_BG = "#183122"
 CURRENT_BG = "#584010"
 PENDING_BG = "#2B1640"
 COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
+    (1920, 1080),
+    (1280, 960),
     (1280, 720),
     (960, 540),
-    (1280, 960),
-    (1920, 1080),
     (640, 480),
     (640, 360),
 ]
@@ -1542,7 +1542,8 @@ class CastelCredCamQt(QMainWindow):
             crop_box = self._compute_portrait_crop_box(transformed.shape[1], transformed.shape[0], face_box)
             crop_box = self._smooth_crop_box(crop_box)
             self.current_crop_box = crop_box
-            output = self._crop_frame_with_box(transformed, crop_box, output_size=(1000, 1400))
+            target_size = (900, 1200) if for_preview else (1500, 2000)
+            output = self._crop_frame_with_box(transformed, crop_box, output_size=target_size)
         else:
             self.current_crop_box = None
             self.stable_crop_box = None
@@ -1640,7 +1641,13 @@ class CastelCredCamQt(QMainWindow):
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return frame
-        return cv2.resize(crop, output_size, interpolation=cv2.INTER_CUBIC)
+        crop_h, crop_w = crop.shape[:2]
+        target_w, target_h = output_size
+        if target_w < crop_w or target_h < crop_h:
+            interpolation = cv2.INTER_AREA
+        else:
+            interpolation = cv2.INTER_CUBIC
+        return cv2.resize(crop, output_size, interpolation=interpolation)
 
     def _draw_context_guides(
         self,
