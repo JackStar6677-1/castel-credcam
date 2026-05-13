@@ -368,6 +368,22 @@ def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
     return deduped
 
 
+def record_identity_key(student_name: str, course: str, rut: str = "") -> tuple[str, str, str]:
+    return (
+        sanitize_file_component(student_name).casefold(),
+        sanitize_file_component(course).casefold(),
+        rut_no_hyphen(rut),
+    )
+
+
+def has_record_for_student(records: List[PhotoRecord], student_name: str, course: str, rut: str = "") -> bool:
+    target_key = record_identity_key(student_name, course, rut)
+    for record in records:
+        if record_identity_key(record.student_name, record.course, record.rut) == target_key:
+            return True
+    return False
+
+
 def ensure_csv_exists(csv_path: Path) -> None:
     if csv_path.exists():
         return
@@ -778,6 +794,9 @@ def capture_photo(
             continue
         student_name = active_student_name or typed_name.strip()
         if not student_name:
+            continue
+        if has_record_for_student(session.records, student_name, session.course_display):
+            print(f"Ya existe una foto de {student_name} en {session.course_display}. No se guarda duplicado.")
             continue
 
         record = build_record(session, student_name)

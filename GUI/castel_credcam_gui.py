@@ -30,6 +30,7 @@ from castel_credcam import (  # noqa: E402
     backup_course_dir,
     build_photo_filename,
     configure_capture,
+    has_record_for_student,
     ensure_photo_backup,
     get_logs_dir,
     list_available_cameras,
@@ -1037,6 +1038,19 @@ class CastelCredCamGUI:
         self._refresh_student_card_mode()
         self._refresh_course_view()
 
+    def _advance_roster_past_completed(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        while True:
+            student = self.session.current_roster_student()
+            if student is None:
+                return
+            if not self._student_is_completed(student):
+                return
+            if self.session.roster_index >= self.session.roster_total:
+                return
+            self.session.advance_roster()
+
     def _refresh_student_card_mode(self) -> None:
         manual_mode = self.session is None or not self.session.has_roster
         if self.student_card_title_var is not None:
@@ -1698,6 +1712,7 @@ class CastelCredCamGUI:
         self.status_var.set(f"Sesion iniciada en {session_dir}")
         if roster_students:
             self.session.roster_index = self.roster_preview_index.get(course_display, 0)
+            self._advance_roster_past_completed()
         self._sync_session_student_from_roster()
         self._refresh_student_card_mode()
         self._update_roster_session_label()
@@ -1738,6 +1753,22 @@ class CastelCredCamGUI:
             return
 
         student_rut = roster_student.rut if roster_student is not None else ""
+        if has_record_for_student(self.session.records, student_name, self.session.course_display, student_rut):
+            self.logger.info(
+                "Capture blocked: duplicate student already recorded. student=%s rut=%s course=%s",
+                student_name,
+                student_rut,
+                self.session.course_display,
+            )
+            messagebox.showwarning(
+                APP_TITLE,
+                f"Ya existe una foto de {student_name} en este curso. No se guardo duplicado.",
+            )
+            if self.session.has_roster:
+                self._advance_roster_past_completed()
+                self._sync_session_student_from_roster()
+            self._refresh_course_view(force=True)
+            return
 
         countdown = int(self.countdown_var.get().split()[0])
         for remaining in range(countdown, 0, -1):
@@ -1775,6 +1806,7 @@ class CastelCredCamGUI:
         self.session.records.append(record)
         if self.session.has_roster:
             self.session.advance_roster()
+            self._advance_roster_past_completed()
             self._sync_session_student_from_roster()
         else:
             self.student_var.set("")
