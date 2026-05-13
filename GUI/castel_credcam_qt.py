@@ -1542,7 +1542,7 @@ class CastelCredCamQt(QMainWindow):
             crop_box = self._compute_portrait_crop_box(transformed.shape[1], transformed.shape[0], face_box)
             crop_box = self._smooth_crop_box(crop_box)
             self.current_crop_box = crop_box
-            target_size = (900, 1200) if for_preview else (1500, 2000)
+            target_size = (900, 1200) if for_preview else None
             output = self._crop_frame_with_box(transformed, crop_box, output_size=target_size)
         else:
             self.current_crop_box = None
