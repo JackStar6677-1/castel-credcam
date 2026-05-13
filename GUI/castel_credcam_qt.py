@@ -1542,7 +1542,7 @@ class CastelCredCamQt(QMainWindow):
             crop_box = self._compute_portrait_crop_box(transformed.shape[1], transformed.shape[0], face_box)
             crop_box = self._smooth_crop_box(crop_box)
             self.current_crop_box = crop_box
-            target_size = (900, 1200) if for_preview else (1500, 2000)
+            target_size = (900, 1200) if for_preview else None
             output = self._crop_frame_with_box(transformed, crop_box, output_size=target_size)
         else:
             self.current_crop_box = None
@@ -1635,12 +1635,14 @@ class CastelCredCamQt(QMainWindow):
         self,
         frame: np.ndarray,
         crop_box: tuple[int, int, int, int],
-        output_size: tuple[int, int] = (900, 1200),
+        output_size: Optional[tuple[int, int]] = (900, 1200),
     ) -> np.ndarray:
         x1, y1, x2, y2 = crop_box
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return frame
+        if output_size is None:
+            return crop.copy()
         crop_h, crop_w = crop.shape[:2]
         target_w, target_h = output_size
         if target_w < crop_w or target_h < crop_h:
