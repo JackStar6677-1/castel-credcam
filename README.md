@@ -1,284 +1,154 @@
 # CastelCredCam
 
-CastelCredCam es una herramienta local en Python para tomar fotos tipo credencial de estudiantes de forma rapida, ordenada y repetible durante jornadas reales de curso.
+> Herramienta local en Python para tomar fotos tipo credencial de estudiantes con orden, respaldo y trazabilidad por curso.
 
-El problema que intenta resolver es muy concreto: tener una app sencilla para abrir una camara, escribir el nombre del estudiante, capturar la foto y dejar todo guardado por curso sin depender de un flujo pesado de estudio fotografico ni de software complejo.
+CastelCredCam esta pensada para jornadas reales de captura escolar. Permite abrir una camara, avanzar alumno por alumno, guardar cada foto con nombre claro, mantener un respaldo espejo y dejar registro en CSV y logs para que nada se pierda si hay que retomar el trabajo despues.
 
-Si estas retomando el proyecto despues de un tiempo, empieza por esta guia:
+## Lo esencial
 
-- [Guia operativa y de soporte](docs/OPERACION.md)
-- [Logs y diagnostico](#logs-y-diagnostico)
-- [Estructura del repositorio](#estructura-del-repositorio)
+- Captura local en Windows, sin depender de servicios externos.
+- Flujo por consola para uso rapido y diagnostico.
+- GUI principal en PySide6 para operacion real con roster de alumnos.
+- Carga de nominas desde Excel o CSV.
+- Guardado por curso con `index.csv` y carpeta espejo en `fotos_respaldo/`.
+- Reintento de la ultima foto con historial de respaldo.
+- Logs detallados para revisar fallas tecnicas.
+- Versiones separadas para flujo principal y compatibilidad historica.
 
-## Objetivo del repositorio
+## Que resuelve
 
-Este repo guarda el experimento completo de captura local, incluyendo:
+El problema que intenta resolver es simple:
 
-- una version principal por consola con preview de OpenCV
-- una version GUI en PySide6 con mas controles
-- scripts de arranque para flujos comunes
-- archivos de configuracion local para aliases de camaras
-- utilidades de diagnostico
+1. abrir una camara funcional.
+2. cargar una lista de alumnos cuando exista.
+3. capturar fotos de forma ordenada.
+4. guardar todo con nombres legibles.
+5. dejar respaldo por si se borra algo o se repite una toma.
 
-## Que hace la aplicacion
+La idea no es reemplazar un estudio fotografico profesional. La idea es hacer una herramienta practica, liviana y confiable para sesiones largas de curso.
 
-Funciones principales:
+## Flujo recomendado
 
-- pregunta si la sesion es de prueba o de curso real
-- crea y organiza carpetas por curso
-- guarda las capturas numeradas automaticamente
-- mantiene un `index.csv` con metadatos de cada foto
-- puede cargar una lista de alumnos desde Excel o CSV y avanzar secuencialmente
-- crea una carpeta espejo `fotos_respaldo/` por curso con copia de cada foto y del `index.csv`
-- nombra cada archivo como `Nombre Alumno-Curso-RUT.jpg` cuando hay lista cargada
-- crea logs detallados de arranque, errores y cierre en `logs/`
-- recuerda la ultima camara valida usada
-- permite elegir backend y camara por indice
-- muestra preview en vivo con overlay informativo
-- deja la captura final limpia aunque el overlay se vea en pantalla
-- ofrece una etapa de revision inmediata para repetir la ultima foto si hace falta
-- genera un reporte de sesion al terminar
+La forma mas segura de trabajar es esta:
 
-## Como esta pensado el flujo
+1. preparar la nomina del curso en Excel o CSV.
+2. abrir la GUI principal.
+3. cargar la lista.
+4. verificar que el curso detectado sea el correcto.
+5. confirmar camara y backend.
+6. capturar alumno por alumno.
+7. usar `Volver atras y reintentar` si una foto quedo mala.
+8. cerrar la sesion y revisar `fotos/`, `fotos_respaldo/` y `index.csv`.
 
-La app se divide en dos capas:
+## Componentes del proyecto
 
-- `castel_credcam.py` es el flujo principal por consola, util para jornadas simples y para diagnosticar rapido
-- `GUI/castel_credcam_qt.py` es la interfaz principal de operacion, pensada para captura en curso real con roster, progreso y vista completa del curso
+### `castel_credcam.py`
 
-La idea de diseno es esta:
+Flujo principal por consola. Sirve para:
 
-1. cargar una lista de alumnos cuando exista
-2. elegir el curso o trabajar en modo prueba
-3. seleccionar la camara disponible
-4. capturar en secuencia
-5. guardar la foto principal y su respaldo espejo
-6. dejar trazabilidad en CSV y en logs
+- capturas rapidas.
+- pruebas de hardware.
+- diagnostico simple.
+- sesiones livianas sin interfaz grande.
 
-La GUI actual ya no depende de escribir cada alumno a mano si se carga una nomina.
+### `GUI/castel_credcam_qt.py`
 
-## Casos de uso pensados
+GUI principal del proyecto. Incluye:
 
-- fotografiar estudiantes para credenciales o fichas internas
-- jornadas donde se necesita capturar muchas fotos seguidas
-- escenarios con webcam integrada, webcam USB o camara virtual desde celular
-- equipos Windows donde interesa una herramienta local y simple
+- panel visual mas comodo para operador.
+- preview en vivo.
+- carga de roster por curso.
+- avance secuencial de alumnos.
+- tabla de progreso.
+- control de reintentos.
+- respaldo espejo por curso.
 
-## Stack
+### `GUI/castel_credcam_gui.py`
 
-- Python
-- OpenCV para captura y preview
-- PySide6 para la GUI incluida en `GUI/`
-- archivos CSV y JSON para persistencia local ligera
+Variante legacy mantenida por compatibilidad interna. No es la interfaz recomendada para trabajo diario.
 
-## Estructura del repositorio
+### `camera_diagnostic.py`
+
+Ayuda a verificar camaras, indices y backends antes de una jornada.
+
+## Funciones principales
+
+- preguntar si la sesion es de prueba o de curso real.
+- crear carpetas por curso.
+- generar nombres de archivo del tipo `Nombre Alumno-Curso-RUT.jpg`.
+- registrar metadatos en `index.csv`.
+- cargar roster desde Excel o CSV.
+- avanzar automaticamente al siguiente alumno cuando hay lista cargada.
+- crear copia espejo en `fotos_respaldo/<curso>/`.
+- guardar auditoria de reintentos en `retakes.csv`.
+- recordar la ultima camara usada.
+- trabajar con camara integrada, USB o virtual.
+- dejar logs de arranque, captura, errores y cierre.
+
+## Regla de nombres
+
+Cuando hay roster cargado, el archivo se guarda con este formato:
+
+```text
+Nombre Alumno-Curso-RUT.jpg
+```
+
+Si no hay RUT, la app usa `SIN_RUT`.
+
+Esto ayuda a recuperar archivos manualmente aunque el CSV se pierda o se necesite reconstruir una carpeta.
+
+## Salida esperada
+
+Una sesion normal deja una estructura parecida a esta:
 
 ```text
 CastelCredCam/
-|-- castel_credcam.py
-|-- camera_aliases.json
-|-- camera_diagnostic.py
-|-- requirements.txt
-|-- run_castel_credcam.bat
-|-- run_castel_credcam_iriun.bat
-|-- logs/
-|-- README.md
-|-- LICENSE
-`-- GUI/
-    |-- castel_credcam_qt.py
-    `-- run_castel_credcam_gui.bat
+|-- fotos/
+|   `-- 7BASICOA/
+|       |-- Nombre Alumno-7 BASICO A-12345678.jpg
+|       |-- index.csv
+|       `-- session_YYYYMMDD_HHMMSS.txt
+|-- fotos_respaldo/
+|   `-- 7BASICOA/
+|       |-- Nombre Alumno-7 BASICO A-12345678.jpg
+|       |-- index.csv
+|       `-- retakes.csv
+`-- logs/
+    |-- gui_qt_YYYYMMDD_HHMMSS_PID.log
+    `-- cli_YYYYMMDD_HHMMSS_PID.log
 ```
-
-## Archivo por archivo
-
-- `castel_credcam.py`
-  Flujo principal de captura. Maneja seleccion de camara, sesion, overlay, captura, revision, guardado y CSV.
-- `camera_aliases.json`
-  Alias legibles para indices y backends de camara del equipo.
-- `camera_diagnostic.py`
-  Script para revisar que camaras detecta OpenCV y generar una salida de diagnostico local.
-- `GUI/castel_credcam_gui.py`
-  Variante legacy de Tkinter mantenida por compatibilidad interna.
-- `GUI/castel_credcam_qt.py`
-  GUI principal nueva en PySide6, con panel lateral responsivo, preview en vivo, roster por curso y tabla de progreso.
-- `docs/OPERACION.md`
-  Guia de operacion, troubleshooting y estructura interna para cualquiera que herede el proyecto.
-- `run_castel_credcam.bat`
-  Lanzador rapido del flujo principal.
-- `run_castel_credcam_iriun.bat`
-  Lanzador preparado para una configuracion concreta de Iriun Webcam.
-
-## Requisitos
-
-- Windows 10 u 11
-- Python 3.10 o superior recomendado
-- una camara funcional en Windows
-
-Tipos de camara viables:
-
-- webcam integrada
-- webcam USB
-- camara virtual desde celular con apps como Iriun, DroidCam, iVCam o Camo
 
 ## Instalacion
 
 ```powershell
-cd C:\Users\Jack\Documents\GitHub\Experimentos\CastelCredCam
+cd C:\Users\Jack\Documents\GitHub\Experimentos\Castel\CastelCredCam
 py -m pip install -r requirements.txt
 ```
 
-Si tu entorno no usa `py`, puedes usar:
+Si tu entorno no usa `py`:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-## Ejecucion del flujo principal
+## Ejecucion
+
+### Flujo por consola
 
 ```powershell
 py .\castel_credcam.py
 ```
 
-O con:
+Tambien puedes usar:
 
 ```text
 run_castel_credcam.bat
 ```
 
-## Ejecucion con camara preseleccionada
-
-La app admite argumentos para saltarse parte de la seleccion manual:
+### GUI principal
 
 ```powershell
-py .\castel_credcam.py --camera-index 3 --backend dshow
-```
-
-El repo trae un ejemplo listo para Iriun:
-
-```text
-run_castel_credcam_iriun.bat
-```
-
-## Flujo de una sesion
-
-1. elegir modo `prueba` o `curso`
-2. si vas a trabajar con roster, cargar el Excel o CSV de alumnos
-3. elegir el curso en el campo correspondiente
-4. seleccionar camara y backend
-5. capturar con Enter
-6. la GUI avanza automaticamente al siguiente alumno si hay roster cargado
-7. revisar rapidamente la foto o rehacer la ultima si hace falta
-
-### Si usas roster
-
-- la GUI completa `student_name`, `course` y `rut` desde la nomina
-- la tabla del curso marca `Hecho`, `Actual` y `Pendiente`
-- la captura se guarda con el formato `Nombre Alumno-Curso-RUT.jpg`
-- se guarda una copia espejo en `fotos_respaldo/<curso>/`
-
-### Si no usas roster
-
-- puedes seguir usando el campo manual de la sesion
-- la app mantiene el flujo clasico de captura
-- el nombre del archivo queda secuencial por curso
-
-## Salida generada
-
-Durante una sesion, la app crea una estructura local parecida a esta:
-
-```text
-fotos/
-`-- 7A/
-    |-- Nombre Alumno-7A-276719157.jpg
-    |-- Nombre Alumno-7A-274886543.jpg
-    |-- index.csv
-    `-- session_YYYYMMDD_HHMMSS.txt
-
-fotos_respaldo/
-`-- 7A/
-    |-- Nombre Alumno-7A-276719157.jpg
-    |-- Nombre Alumno-7A-274886543.jpg
-    `-- index.csv
-```
-
-`index.csv` guarda columnas como:
-
-- id
-- filename
-- student_name
-- course
-- rut
-- timestamp
-
-Si cargas una lista de alumnos, la GUI completa `student_name` y `rut` automaticamente mientras avanza por el curso.
-Las fotos quedan con formato `Nombre Alumno-Curso-RUT.jpg`, usando el RUT sin guion. Si no hay RUT disponible, la app usa `SIN_RUT`.
-
-### Regla de nombres
-
-La convencion actual prioriza recuperacion manual y orden:
-
-- nombre normalizado del alumno
-- curso
-- RUT sin guion
-
-Eso permite encontrar una foto rapidamente aunque se borre el CSV o se necesite rearmar una carpeta a mano.
-
-## Logs y diagnostico
-
-Cada arranque genera un archivo nuevo dentro de `logs/` con timestamp y PID. Ahí se guardan:
-
-- eventos de inicio y cierre
-- excepciones no controladas con traceback completo
-- errores de carga de roster, captura, backup o rehacer
-- contexto tecnico de la ejecucion, como version de Python y ruta de trabajo
-
-Si la GUI se congela o arroja un error inesperado, revisa el archivo mas reciente de `logs/gui_*.log`.
-Para ejecucion por consola, usa `logs/cli_*.log`.
-
-### Que mirar primero si algo falla
-
-1. revisar el log mas reciente
-2. confirmar que la camara no este ocupada por otra app
-3. verificar que la nomina tenga el curso esperado
-4. comprobar que `fotos/` y `fotos_respaldo/` sigan existiendo
-5. probar `camera_diagnostic.py` para aislar el problema de hardware o backend
-
-### Fallas tipicas
-
-- `No responde` al entrar a `Curso`
-  Normalmente apunta a carga pesada de interfaz o a un render que quedo trabado. En la version Qt esto se fue corrigiendo con logging y con una construccion mas diferida de la vista.
-- `Sin señal de camara`
-  Suele significar que OpenCV abrio el dispositivo pero no recibio frames a tiempo, o que otro proceso tiene la camara tomada.
-- `camara en uso`
-  Cerrar la app anterior, esperar unos segundos y revisar el log. Si persiste, usar el diagnosticador para comprobar que el backend quede libre.
-- roster no carga
-  Verificar que el archivo sea `.xlsx` o `.csv`, que exista la columna de curso y que el nombre del curso coincida con el que elijas en la GUI.
-- foto guardada pero sin respaldo
-  Revisar permisos de escritura y el arbol `fotos_respaldo/<curso>/`.
-
-## GUI incluida
-
-La carpeta `GUI/` contiene una variante con interfaz grafica mas elaborada.
-
-Incluye:
-
-- preview grande
-- controles mas visibles
-- panel lateral de acciones con scroll
-- lista de capturas recientes
-- carga de roster de alumnos para captura secuencial con nombre y RUT
-- vista completa del curso con estados `Hecho`, `Actual` y `Pendiente`
-- respaldo espejo por curso en `fotos_respaldo/`
-- archivos nombrados de forma legible para recuperación manual
-- logs detallados por arranque y error
-- flujo mas amigable para operadores no tecnicos
-- vista completa del curso con barra de progreso y estados
-- preview con overlay de ayuda para encuadre y seguimiento de rostro
-
-Ejecucion:
-
-```powershell
-cd C:\Users\Jack\Documents\GitHub\Experimentos\CastelCredCam\GUI
+cd C:\Users\Jack\Documents\GitHub\Experimentos\Castel\CastelCredCam\GUI
 py .\castel_credcam_qt.py
 ```
 
@@ -288,104 +158,129 @@ O con:
 GUI\run_castel_credcam_gui.bat
 ```
 
-## Diagnostico
+### Con camara preseleccionada
 
-Si necesitas comprobar deteccion de camaras:
+```powershell
+py .\castel_credcam.py --camera-index 3 --backend dshow
+```
+
+Para una configuracion concreta de Iriun existe:
+
+```text
+run_castel_credcam_iriun.bat
+```
+
+## Que guarda cada sesion
+
+- `fotos/<curso>/` guarda las fotos principales.
+- `fotos_respaldo/<curso>/` guarda la copia espejo.
+- `index.csv` guarda `id`, `filename`, `student_name`, `course`, `rut` y `timestamp`.
+- `retakes.csv` registra cuando una captura se rehace.
+- `logs/` guarda trazabilidad tecnica con fecha y hora.
+
+## Roster de alumnos
+
+La GUI puede cargar una nomina desde Excel o CSV y trabajar con captura secuencial.
+
+Cuando la lista esta cargada:
+
+- completa nombre, curso y RUT desde la nomina.
+- marca alumnos como `Hecho`, `Actual` o `Pendiente`.
+- avanza sola al siguiente alumno despues de guardar.
+- salta registros ya completados si vuelves a abrir la sesion.
+
+## Reintentos y respaldo
+
+El proyecto esta preparado para jornadas donde una foto se repite porque el alumno quiere otra toma o la imagen anterior no quedo bien.
+
+Cuando pasa eso:
+
+- la ultima captura puede rehacerse desde la GUI.
+- la copia anterior se conserva en el respaldo.
+- si existe una version previa del archivo, se guarda con sufijo `__reintento_YYYYMMDD_HHMMSS`.
+- el respaldo escribe una entrada en `retakes.csv` con nota `reintento`.
+
+## Diagnostico rapido
+
+Si tienes dudas con la camara:
 
 ```powershell
 py .\camera_diagnostic.py
 ```
 
-Esto sirve para validar indices, backends y estabilidad antes de una jornada real.
+Esto ayuda a revisar indices, backends y estabilidad antes de una jornada real.
 
-## Persistencia local y archivos auxiliares
-
-El proyecto usa persistencia ligera:
-
-- `camera_aliases.json` para nombres legibles de camaras
-- `last_camera.json` para recordar la ultima camara valida
-- `index.csv` por curso para registrar capturas
-
-`last_camera.json` es local y no se sube al repo.
-Los logs se guardan en `logs/` y tampoco se versionan.
-
-### Estructura local esperada
-
-En una jornada normal deberias terminar con algo similar a esto:
+## Estructura del repositorio
 
 ```text
 CastelCredCam/
+|-- castel_credcam.py
+|-- camera_diagnostic.py
+|-- camera_aliases.json
+|-- requirements.txt
+|-- run_castel_credcam.bat
+|-- run_castel_credcam_iriun.bat
+|-- README.md
+|-- LICENSE
+|-- docs/
+|   `-- OPERACION.md
+|-- GUI/
+|   |-- castel_credcam_qt.py
+|   `-- castel_credcam_gui.py
 |-- fotos/
-|   `-- 1 BASICO A/
-|       |-- Nombre Alumno-1 BASICO A-12345678.jpg
-|       |-- index.csv
-|       `-- session_YYYYMMDD_HHMMSS.txt
 |-- fotos_respaldo/
-|   `-- 1 BASICO A/
-|       |-- Nombre Alumno-1 BASICO A-12345678.jpg
-|       `-- index.csv
 `-- logs/
-    |-- gui_qt_YYYYMMDD_HHMMSS_PID.log
-    `-- cli_YYYYMMDD_HHMMSS_PID.log
 ```
+
+## Requisitos
+
+- Windows 10 u 11.
+- Python 3.10 o superior recomendado.
+- una camara funcional en Windows.
+
+Tipos de camara viables:
+
+- webcam integrada.
+- webcam USB.
+- camara virtual desde celular con apps como Iriun, DroidCam, iVCam o Camo.
 
 ## Seguridad y privacidad
 
-Este punto es importante: el repo esta configurado para no subir datos sensibles de uso real.
+El repo esta pensado para trabajar con datos locales y no publicar material sensible por accidente.
 
-Se ignoran por defecto:
+En general se ignoran:
 
 - `fotos/`
 - `fotos_respaldo/`
-- `camera_diagnostic/`
-- `last_camera.json`
+- `logs/`
 - caches de Python
 - entornos virtuales
 - archivos locales de editor y sistema
 
-Eso permite tener el codigo publico sin publicar fotos de estudiantes ni salidas locales.
+Eso ayuda a mantener el codigo publico sin subir fotos de estudiantes ni salidas de uso diario.
 
-## Mantenimiento para quien retome el proyecto
+## Documentacion util
 
-Si una persona hereda este repo, este es el orden recomendado:
+- [Guia operativa](docs/OPERACION.md)
 
-1. leer `docs/OPERACION.md`
-2. revisar `README.md` completo
-3. instalar dependencias con `requirements.txt`
-4. ejecutar `camera_diagnostic.py`
-5. abrir la GUI con una carpeta de prueba
-6. revisar el log si algo falla
+## Estado actual del proyecto
 
-Si se cambia la GUI, probar siempre:
+Hoy la ruta recomendada es:
 
-- carga de roster
-- avance anterior/siguiente
-- captura
-- rehacer ultima
-- cierre de camara
-- apertura de `Curso`
-- generacion de respaldo
+- `GUI/castel_credcam_qt.py` como interfaz principal.
+- `castel_credcam.py` como flujo de respaldo por consola.
+- `docs/OPERACION.md` como guia tecnica y de soporte.
 
-## Licencia
-
-El repositorio se publica con licencia MIT. Revisa `LICENSE` para el texto completo.
-
-## Estado del proyecto
-
-CastelCredCam es una herramienta practica y funcional, pero sigue siendo un experimento orientado a un flujo concreto. No intenta reemplazar suites fotograficas profesionales ni sistemas escolares completos.
-
-Hoy la ruta recomendada para uso real es:
-
-- `GUI/castel_credcam_qt.py` como interfaz principal
-- `castel_credcam.py` como flujo de respaldo por consola
-- `docs/OPERACION.md` como guia para operadores o personas que retomen el proyecto
-
-La GUI antigua de Tkinter se mantiene solo como referencia historica y no deberia tomarse como entrada principal de soporte.
+La GUI legacy de Tkinter sigue en el repo por compatibilidad, pero no es la opcion principal de uso.
 
 ## Posibles mejoras futuras
 
-- recorte automatico opcional para exportacion final
-- exportadores a formatos de sistemas escolares concretos
-- selector visual de camaras con mini preview
-- etiquetado o validacion mas estricta de nombres
-- empaquetado como ejecutable de Windows
+- recorte automatico opcional para exportacion final.
+- exportadores para sistemas escolares concretos.
+- selector visual de camaras con mini preview.
+- validacion mas estricta de nombres y roster.
+- empaquetado como ejecutable de Windows.
+
+## Licencia
+
+Este repositorio se publica con licencia MIT. Revisa `LICENSE` para el texto completo.
