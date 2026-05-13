@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import logging
 import json
 import os
@@ -366,6 +367,70 @@ def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
         deduped.append(record)
     deduped.sort(key=lambda item: item.id)
     return deduped
+
+
+def image_signature(frame: np.ndarray) -> int:
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return 0
+    if len(frame.shape) == 3:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = frame.copy()
+    small = cv2.resize(gray, (9, 8), interpolation=cv2.INTER_AREA)
+    diff = small[:, 1:] > small[:, :-1]
+    signature = 0
+    for value in diff.flatten():
+        signature = (signature << 1) | int(bool(value))
+    return signature
+
+
+def image_signature_from_path(image_path: Path) -> Optional[int]:
+    if not image_path.exists():
+        return None
+    image = cv2.imread(str(image_path))
+    if image is None:
+        return None
+    return image_signature(image)
+
+
+def image_signature_distance(left: int, right: int) -> int:
+    return (left ^ right).bit_count()
+
+
+def image_fingerprint(frame: np.ndarray) -> Optional[str]:
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return None
+    ok, encoded = cv2.imencode(".jpg", frame)
+    if not ok:
+        return None
+    return hashlib.sha256(encoded.tobytes()).hexdigest()
+
+
+def image_fingerprint_from_path(image_path: Path) -> Optional[str]:
+    if not image_path.exists():
+        return None
+    try:
+        return hashlib.sha256(image_path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def find_similar_record(
+    frame: np.ndarray,
+    records: List[PhotoRecord],
+    session_dir: Path,
+) -> Optional[PhotoRecord]:
+    target_fingerprint = image_fingerprint(frame)
+    if target_fingerprint is None:
+        return None
+    for record in records:
+        image_path = session_dir / record.filename
+        record_fingerprint = image_fingerprint_from_path(image_path)
+        if record_fingerprint is None:
+            continue
+        if record_fingerprint == target_fingerprint:
+            return record
+    return None
 
 
 def record_identity_key(student_name: str, course: str, rut: str = "") -> tuple[str, str, str]:
@@ -797,6 +862,13 @@ def capture_photo(
             continue
         if has_record_for_student(session.records, student_name, session.course_display):
             print(f"Ya existe una foto de {student_name} en {session.course_display}. No se guarda duplicado.")
+            continue
+        similar_record = find_similar_record(frame, session.records, session.session_dir)
+        if similar_record is not None:
+            print(
+                "La foto ya coincide con "
+                f"{similar_record.student_name} en {similar_record.course}. No se guarda duplicado."
+            )
             continue
 
         record = build_record(session, student_name)

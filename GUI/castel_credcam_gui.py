@@ -30,6 +30,7 @@ from castel_credcam import (  # noqa: E402
     backup_course_dir,
     build_photo_filename,
     configure_capture,
+    find_similar_record,
     has_record_for_student,
     ensure_photo_backup,
     get_logs_dir,
@@ -1767,6 +1768,22 @@ class CastelCredCamGUI:
             if self.session.has_roster:
                 self._advance_roster_past_completed()
                 self._sync_session_student_from_roster()
+            self._refresh_course_view(force=True)
+            return
+        similar_record = find_similar_record(self.current_frame, self.session.records, self.session.session_dir)
+        if similar_record is not None:
+            self.logger.info(
+                "Capture blocked: duplicate image matches %s (%s). student=%s rut=%s course=%s",
+                similar_record.student_name,
+                similar_record.course,
+                student_name,
+                student_rut,
+                self.session.course_display,
+            )
+            messagebox.showwarning(
+                APP_TITLE,
+                f"Esta foto ya coincide con {similar_record.student_name} en {similar_record.course}.\nNo se guardo otro registro.",
+            )
             self._refresh_course_view(force=True)
             return
 
