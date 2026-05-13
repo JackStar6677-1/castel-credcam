@@ -1864,7 +1864,7 @@ class CastelCredCamGUI:
         image_path = self.session.session_dir / record.filename
         if image_path.exists():
             image_path.unlink()
-        append_retake_audit(self.session.backup_dir, record)
+        append_retake_audit(self.session.backup_dir, record, note="reintento")
         rewrite_csv(self.session.csv_path, self.session.records)
         try:
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)

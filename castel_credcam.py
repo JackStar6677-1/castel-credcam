@@ -328,7 +328,7 @@ def ensure_photo_backup(source_path: Path, backup_path: Path) -> None:
     shutil.copy2(source_path, target_path)
 
 
-def append_retake_audit(backup_dir: Path, record: PhotoRecord, note: str = "rehacer") -> None:
+def append_retake_audit(backup_dir: Path, record: PhotoRecord, note: str = "reintento") -> None:
     backup_dir.mkdir(parents=True, exist_ok=True)
     audit_path = backup_dir / RETAKE_AUDIT_FILENAME
     write_header = not audit_path.exists()
@@ -779,7 +779,7 @@ def remove_last_record(session: SessionContext) -> Optional[PhotoRecord]:
     image_path = session.session_dir / last_record.filename
     if image_path.exists():
         image_path.unlink()
-    append_retake_audit(session.backup_dir, last_record)
+    append_retake_audit(session.backup_dir, last_record, note="reintento")
     rewrite_csv(session.csv_path, session.records)
     try:
         shutil.copy2(session.csv_path, session.backup_dir / CSV_FILENAME)
