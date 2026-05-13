@@ -26,6 +26,7 @@ PHOTOS_DIRNAME = "fotos"
 BACKUP_PHOTOS_DIRNAME = "fotos_respaldo"
 TEST_FOLDER_NAME = "_pruebas"
 CSV_FILENAME = "index.csv"
+RETAKE_AUDIT_FILENAME = "retakes.csv"
 MAX_CAMERA_INDEX = 8
 WARMUP_FRAMES = 12
 CAMERA_RESOLUTION_FILENAME = "camera_resolution.json"
@@ -320,7 +321,31 @@ def backup_course_dir(photos_root: Path, course_slug: str) -> Path:
 
 def ensure_photo_backup(source_path: Path, backup_path: Path) -> None:
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, backup_path)
+    target_path = backup_path
+    if target_path.exists():
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target_path = target_path.with_name(f"{target_path.stem}__reintento_{stamp}{target_path.suffix}")
+    shutil.copy2(source_path, target_path)
+
+
+def append_retake_audit(backup_dir: Path, record: PhotoRecord, note: str = "rehacer") -> None:
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = backup_dir / RETAKE_AUDIT_FILENAME
+    write_header = not audit_path.exists()
+    with audit_path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        if write_header:
+            writer.writerow(["timestamp", "action", "id", "filename", "student_name", "course", "rut", "note"])
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "retake",
+            record.id,
+            record.filename,
+            record.student_name,
+            record.course,
+            record.rut,
+            note,
+        ])
 
 
 def ask_mode() -> str:
@@ -754,9 +779,7 @@ def remove_last_record(session: SessionContext) -> Optional[PhotoRecord]:
     image_path = session.session_dir / last_record.filename
     if image_path.exists():
         image_path.unlink()
-    backup_image_path = session.backup_dir / last_record.filename
-    if backup_image_path.exists():
-        backup_image_path.unlink()
+    append_retake_audit(session.backup_dir, last_record)
     rewrite_csv(session.csv_path, session.records)
     try:
         shutil.copy2(session.csv_path, session.backup_dir / CSV_FILENAME)
