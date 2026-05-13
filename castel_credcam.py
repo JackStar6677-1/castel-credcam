@@ -266,13 +266,13 @@ def backend_key_from_id(backend_id: int) -> str:
 
 def camera_priority(alias: str, backend_name: str) -> tuple[int, int]:
     alias_lower = alias.lower()
-    if "iriun" in alias_lower:
+    if "obs" in alias_lower or "virtual camera" in alias_lower:
         score = 0
     elif "droid" in alias_lower:
         score = 1
-    elif "ivcam" in alias_lower:
-        score = 2
     elif "camo" in alias_lower:
+        score = 2
+    elif "ivcam" in alias_lower:
         score = 3
     elif "laptop" in alias_lower or "integrated" in alias_lower:
         score = 6
@@ -283,6 +283,23 @@ def camera_priority(alias: str, backend_name: str) -> tuple[int, int]:
 
     backend_score = 0 if backend_name == "DirectShow" else 1
     return score, backend_score
+
+
+def camera_source_kind(alias: str, backend_name: str) -> str:
+    alias_lower = alias.lower()
+    if "obs" in alias_lower or "virtual camera" in alias_lower:
+        return "OBS"
+    if "droid" in alias_lower:
+        return "DroidCam"
+    if "camo" in alias_lower:
+        return "Camo"
+    if "ivcam" in alias_lower:
+        return "iVCam"
+    if "laptop" in alias_lower or "integrated" in alias_lower:
+        return "Integrada"
+    if backend_name == "DirectShow":
+        return "DirectShow"
+    return "Camara"
 
 
 def sanitize_folder_name(value: str) -> str:

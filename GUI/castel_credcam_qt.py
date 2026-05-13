@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -31,6 +32,8 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QListWidget,
+    QListWidgetItem,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -56,6 +59,7 @@ from castel_credcam import (  # noqa: E402
     build_photo_filename,
     configure_capture,
     backend_key_from_id,
+    camera_source_kind,
     ensure_photo_backup,
     get_logs_dir,
     list_available_cameras,
@@ -412,6 +416,20 @@ class CastelCredCamQt(QMainWindow):
             QFrame#CapturePanel {{
                 background: {INFO_BG};
             }}
+            QListWidget {{
+                background: #170D25;
+                border: 1px solid {CARD_EDGE};
+                border-radius: 10px;
+                padding: 4px;
+            }}
+            QListWidget::item {{
+                padding: 8px 10px;
+                border-radius: 8px;
+            }}
+            QListWidget::item:selected {{
+                background: {ACCENT_PURPLE};
+                color: {TEXT_PRIMARY};
+            }}
             QLabel#AppTitle {{
                 font-size: 23pt;
                 font-weight: 800;
@@ -625,11 +643,28 @@ class CastelCredCamQt(QMainWindow):
         camera_layout = QVBoxLayout(self.camera_card)
         camera_layout.setContentsMargins(16, 16, 16, 16)
         camera_layout.setSpacing(10)
-        camera_layout.addWidget(self._card_title("Camara"))
-        camera_layout.addWidget(self._muted_label("Fuente detectada"))
+        camera_layout.addWidget(self._card_title("Fuentes de video"))
+        camera_layout.addWidget(self._muted_label("DroidCam, OBS Virtual Camera o webcam integrada"))
+        self.source_status_label = self._muted_label("Refresca la lista si abres OBS o DroidCam despues de iniciar.")
+        camera_layout.addWidget(self.source_status_label)
+
+        self.source_list = QListWidget()
+        self.source_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.source_list.currentRowChanged.connect(self._on_source_selected)
+        self.source_list.setMinimumHeight(170)
+        camera_layout.addWidget(self.source_list)
+
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
+        self.camera_combo.setVisible(False)
         camera_layout.addWidget(self.camera_combo)
+
+        refresh_row = QHBoxLayout()
+        self.refresh_sources_button = QPushButton("Refrescar fuentes")
+        self.refresh_sources_button.setObjectName("GoldButton")
+        self.refresh_sources_button.clicked.connect(self.refresh_sources)
+        refresh_row.addWidget(self.refresh_sources_button)
+        camera_layout.addLayout(refresh_row)
 
         self.resolution_combo = QComboBox()
         self.resolution_combo.currentIndexChanged.connect(self._on_resolution_selected)
@@ -661,10 +696,10 @@ class CastelCredCamQt(QMainWindow):
         row.addWidget(self.countdown_combo, 1, 1)
         camera_layout.addLayout(row)
 
-        self.prev_camera_button = QPushButton("Camara anterior")
+        self.prev_camera_button = QPushButton("Fuente anterior")
         self.prev_camera_button.setObjectName("GoldButton")
         self.prev_camera_button.clicked.connect(self.prev_camera)
-        self.next_camera_button = QPushButton("Camara siguiente")
+        self.next_camera_button = QPushButton("Fuente siguiente")
         self.next_camera_button.setObjectName("GoldButton")
         self.next_camera_button.clicked.connect(self.next_camera)
         camera_layout.addWidget(self.prev_camera_button)
@@ -862,18 +897,26 @@ class CastelCredCamQt(QMainWindow):
 
     def _load_camera_choices(self) -> None:
         self.camera_combo.blockSignals(True)
+        self.source_list.blockSignals(True)
         self.camera_combo.clear()
+        self.source_list.clear()
         self.camera_choices: list[tuple[int, str, int, str, str]] = self.available_cameras
         for index, label, backend_id, backend_name, alias in self.camera_choices:
-            text = f"{label} | {backend_name}"
+            source_kind = camera_source_kind(alias, backend_name)
+            text = f"{source_kind} | {label} | {backend_name}"
             self.camera_combo.addItem(text, (index, backend_id, backend_name, alias))
+            self.source_list.addItem(QListWidgetItem(text))
         self.camera_combo.blockSignals(False)
+        self.source_list.blockSignals(False)
         if not self.camera_choices:
             self.camera_combo.addItem("No se detectaron camaras", None)
+            self.source_list.addItem(QListWidgetItem("No se detectaron fuentes"))
         if self.camera_choices:
             self.logger.info("Detected cameras: %s", len(self.camera_choices))
+            self.source_status_label.setText(f"{len(self.camera_choices)} fuentes detectadas. Selecciona una y refresca si cambias el cliente.")
         else:
             self.logger.warning("No cameras detected at startup.")
+            self.source_status_label.setText("No se detectaron fuentes de video.")
 
         self.resolution_combo.blockSignals(True)
         self.resolution_combo.clear()
@@ -918,8 +961,11 @@ class CastelCredCamQt(QMainWindow):
                 selected = i
                 break
         self.camera_combo.blockSignals(True)
+        self.source_list.blockSignals(True)
         self.camera_combo.setCurrentIndex(selected)
+        self.source_list.setCurrentRow(selected)
         self.camera_combo.blockSignals(False)
+        self.source_list.blockSignals(False)
         self._apply_selected_camera(selected)
         self._start_camera_thread()
 
@@ -955,6 +1001,12 @@ class CastelCredCamQt(QMainWindow):
         self.camera_alias = alias
         save_last_camera(APP_ROOT, index, backend_key_from_id(backend_id))
         self.logger.info("Camera selected index=%s backend=%s alias=%s", index, backend_name, alias)
+        self.source_status_label.setText(
+            f"Fuente activa: {camera_source_kind(alias, backend_name)} | {alias or f'Camara {index}'} | {backend_name}"
+        )
+        self.source_list.blockSignals(True)
+        self.source_list.setCurrentRow(combo_index)
+        self.source_list.blockSignals(False)
         self._sync_resolution_combo(block_signals=True)
 
     def _start_camera_thread(self) -> None:
@@ -1037,14 +1089,29 @@ class CastelCredCamQt(QMainWindow):
             self._sync_session_ui()
         self._refresh_course_view()
 
-    def _on_camera_selected(self) -> None:
+    def _on_camera_selected(self, *_args) -> None:
         if not self.camera_choices:
             return
         combo_index = self.camera_combo.currentIndex()
         self._apply_selected_camera(combo_index)
         self._start_camera_thread()
 
-    def _on_resolution_selected(self) -> None:
+    def _on_source_selected(self, row: int) -> None:
+        if not self.camera_choices:
+            return
+        if row < 0 or row >= len(self.camera_choices):
+            return
+        if self.camera_combo.currentIndex() != row:
+            self.camera_combo.setCurrentIndex(row)
+
+    def refresh_sources(self) -> None:
+        self.aliases = load_camera_aliases(APP_ROOT)
+        self.available_cameras = list_available_cameras(self.aliases)
+        self._load_camera_choices()
+        self._select_default_camera()
+        self.status_label.setText("Fuentes actualizadas.")
+
+    def _on_resolution_selected(self, *_args) -> None:
         if not self.camera_choices:
             return
         if self.resolution_combo.currentIndex() < 0:
