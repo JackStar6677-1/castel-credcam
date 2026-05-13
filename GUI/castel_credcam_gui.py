@@ -180,7 +180,8 @@ class CastelCredCamGUI:
         self.student_manual_frame: Optional[tk.Frame] = None
         self.student_clear_button: Optional[ttk.Button] = None
         self.student_card_title_var: Optional[tk.StringVar] = None
-        self.course_tree: Optional[ttk.Treeview] = None
+        self.course_tree: Optional[tk.Text] = None
+        self.course_tree_scroll: Optional[ttk.Scrollbar] = None
         self.course_progress_var: Optional[tk.IntVar] = None
         self.course_progress_text_var: Optional[tk.StringVar] = None
         self.course_total_var: Optional[tk.StringVar] = None
@@ -203,7 +204,6 @@ class CastelCredCamGUI:
         self.sidebar_subtitle_label: Optional[tk.Label] = None
         self.sidebar_title_label: Optional[ttk.Label] = None
         self.notebook: Optional[ttk.Notebook] = None
-        self._last_layout_size: tuple[int, int] = (0, 0)
         self._last_layout_profile: Optional[tuple[int, int]] = None
         self._responsive_job: Optional[str] = None
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -573,24 +573,29 @@ class CastelCredCamGUI:
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
 
-        columns = ("estado", "alumno", "rut")
-        self.course_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=16)
-        self.course_tree.heading("estado", text="Estado")
-        self.course_tree.heading("alumno", text="Alumno")
-        self.course_tree.heading("rut", text="RUT")
-        self.course_tree.column("estado", width=110, anchor="center", stretch=False)
-        self.course_tree.column("alumno", width=420, anchor="w")
-        self.course_tree.column("rut", width=140, anchor="center", stretch=False)
-
-        tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.course_tree.yview)
-        self.course_tree.configure(yscrollcommand=tree_scroll.set)
+        self.course_tree = tk.Text(
+            table_frame,
+            wrap="none",
+            bg="#1D102A",
+            fg=TEXT_PRIMARY,
+            insertbackground=ACCENT_GOLD,
+            relief="flat",
+            borderwidth=0,
+            padx=12,
+            pady=10,
+            font=("Consolas", 10),
+            height=16,
+        )
+        self.course_tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.course_tree.yview)
+        self.course_tree.configure(yscrollcommand=self.course_tree_scroll.set)
         self.course_tree.grid(row=0, column=0, sticky="nsew")
-        tree_scroll.grid(row=0, column=1, sticky="ns")
+        self.course_tree_scroll.grid(row=0, column=1, sticky="ns")
 
         self.course_tree.tag_configure("done", background="#163022", foreground="#CFF9E0")
         self.course_tree.tag_configure("current", background="#4E390B", foreground="#FFF0B0")
         self.course_tree.tag_configure("pending", background="#241033", foreground=TEXT_MUTED)
         self.course_tree.tag_configure("empty", background="#241033", foreground="#A89BBB")
+        self.course_tree.tag_configure("header", foreground=ACCENT_GOLD)
 
         footer = tk.Frame(parent, bg=INFO_BG, padx=18, pady=14)
         footer.grid(row=2, column=0, sticky="ew")
@@ -602,7 +607,7 @@ class CastelCredCamGUI:
             row=0, column=1, sticky="e", padx=(8, 0)
         )
 
-        self._refresh_course_view()
+        self._refresh_course_view(force=True)
 
     def _bind_sidebar_mousewheel(self, canvas: tk.Canvas) -> None:
         def _is_within_sidebar(widget: Optional[tk.Misc]) -> bool:
@@ -636,8 +641,20 @@ class CastelCredCamGUI:
         except Exception:
             tab_name = ""
         self.logger.info("Notebook tab changed: %s", tab_name)
+        if tab_name == "Curso":
+            self.root.after_idle(lambda: self._refresh_course_view(force=True))
+
+    def _course_tab_active(self) -> bool:
+        if self.notebook is None:
+            return False
+        try:
+            return self.notebook.tab(self.notebook.select(), "text") == "Curso"
+        except Exception:
+            return False
 
     def _schedule_responsive_layout(self, _event: Optional[tk.Event] = None) -> None:
+        if self._course_tab_active():
+            return
         if self._responsive_job is not None:
             try:
                 self.root.after_cancel(self._responsive_job)
@@ -666,10 +683,9 @@ class CastelCredCamGUI:
         width_profile = 0 if width < 1300 else 1 if width < 1600 else 2
         height_profile = 0 if height < 820 else 1 if height < 950 else 2
         layout_profile = (width_profile, height_profile)
-        if self._last_layout_profile == layout_profile and self._last_layout_size == (width, height):
+        if self._last_layout_profile == layout_profile:
             return
         self._last_layout_profile = layout_profile
-        self._last_layout_size = (width, height)
 
         sidebar_width = 300 if width_profile == 0 else 340 if width_profile == 1 else 380
         if self.left_shell is not None:
@@ -714,14 +730,8 @@ class CastelCredCamGUI:
             self.info_text.configure(font=("Segoe UI", info_size))
 
         if self.course_tree is not None:
-            tree_width = max(420, width - sidebar_width - 80)
-            estado_w = 90 if tree_width < 700 else 110
-            rut_w = 120 if tree_width < 700 else 140
-            alumno_w = max(260, tree_width - estado_w - rut_w - 40)
-            self.course_tree.column("estado", width=estado_w)
-            self.course_tree.column("alumno", width=alumno_w)
-            self.course_tree.column("rut", width=rut_w)
-            self.course_tree.configure(height=tree_height)
+            course_font_size = 9 if width < 1300 else 10
+            self.course_tree.configure(height=tree_height, font=("Consolas", course_font_size))
 
         if hasattr(self, "preview_camera_combo"):
             try:
@@ -969,7 +979,7 @@ class CastelCredCamGUI:
             self.course_var.set(resolved)
 
         self._update_roster_preview(resolved)
-        self._refresh_course_view()
+        self._refresh_course_view(force=True)
         self.status_var.set(f"Lista lista: {path.name}. Elige curso y arranca la sesion.")
 
     def _resolve_roster_course(self, course_name: str) -> str:
@@ -1011,7 +1021,7 @@ class CastelCredCamGUI:
         self.roster_status_var.set(
             f"{resolved}\nAlumno {preview_index + 1} de {len(students)}\nSiguiente: {next_student.display_name}\nRUT: {next_student.rut}"
         )
-        self._refresh_course_view()
+        self._refresh_course_view(force=True)
 
     def _sync_session_student_from_roster(self) -> None:
         if self.session is None or not self.session.has_roster:
@@ -1072,24 +1082,44 @@ class CastelCredCamGUI:
             return next(iter(self.roster_map))
         return ""
 
-    def _student_is_completed(self, student: RosterStudent) -> bool:
-        if self.session is None:
-            return False
+    def _course_csv_path(self, course_name: str) -> Path:
+        course_slug = sanitize_folder_name(course_name)
+        return APP_ROOT / PHOTOS_DIRNAME / course_slug / CSV_FILENAME
+
+    def _records_for_course(self, course_name: str) -> list[PhotoRecord]:
+        if self.session is not None and self.session.course_display == course_name:
+            return list(self.session.records)
+        csv_path = self._course_csv_path(course_name)
+        if not csv_path.exists():
+            return []
+        return load_existing_records(csv_path)
+
+    def _student_is_completed(self, student: RosterStudent, records: Optional[list[PhotoRecord]] = None) -> bool:
+        if records is None:
+            if self.session is not None and self.session.has_roster:
+                records = self.session.records
+            else:
+                return False
         student_name_key = _normalize_key(student.display_name)
         student_rut_key = _normalize_rut_key(student.rut)
-        for record in self.session.records:
+        for record in records:
             if student_rut_key and _normalize_rut_key(getattr(record, "rut", "")) == student_rut_key:
                 return True
             if _normalize_key(record.student_name) == student_name_key:
                 return True
         return False
 
-    def _refresh_course_view(self) -> None:
+    def _refresh_course_view(self, force: bool = False) -> None:
         if self.course_tree is None:
             return
+        if not force and not self._course_tab_active():
+            return
 
-        for item in self.course_tree.get_children():
-            self.course_tree.delete(item)
+        start = datetime.now()
+        self.logger.debug("Refreshing course view. force=%s", force)
+
+        self.course_tree.configure(state="normal")
+        self.course_tree.delete("1.0", "end")
 
         course_name = self._active_roster_course()
         if not self.roster_map:
@@ -1097,7 +1127,8 @@ class CastelCredCamGUI:
             self.course_total_var.set("0 alumnos")
             self.course_progress_text_var.set("0 capturados")
             self.course_progress_var.set(0)
-            self.course_tree.insert("", "end", values=("Vacío", "Carga una lista primero", ""), tags=("empty",))
+            self.course_tree.insert("end", "Vacío\nCarga una lista primero\n", ("empty",))
+            self.course_tree.configure(state="disabled")
             return
 
         if not course_name:
@@ -1106,12 +1137,14 @@ class CastelCredCamGUI:
             self.course_total_var.set("Selecciona un curso para ver el detalle.")
             self.course_progress_text_var.set("Sin curso activo")
             self.course_progress_var.set(0)
-            self.course_tree.insert("", "end", values=("Selecciona", "un curso en el campo Curso", ""), tags=("empty",))
+            self.course_tree.insert("end", "Selecciona un curso en el campo Curso\n", ("empty",))
+            self.course_tree.configure(state="disabled")
             return
 
         students = self.roster_map.get(course_name, [])
         total = len(students)
-        completed = sum(1 for student in students if self._student_is_completed(student))
+        course_records = self._records_for_course(course_name)
+        completed = sum(1 for student in students if self._student_is_completed(student, course_records))
         remaining = max(0, total - completed)
         current_student = None
         if self.session is not None and self.session.has_roster:
@@ -1127,10 +1160,12 @@ class CastelCredCamGUI:
         self.course_progress_var.set(0 if total == 0 else int((completed / total) * 100))
 
         if not students:
-            self.course_tree.insert("", "end", values=("Vacío", "Sin alumnos cargados", ""), tags=("empty",))
+            self.course_tree.insert("end", "Vacío\nSin alumnos cargados\n", ("empty",))
+            self.course_tree.configure(state="disabled")
             return
 
         current_key = _normalize_rut_key(current_student.rut) if current_student is not None else ""
+        self.course_tree.insert("end", f"Estado    Alumno{' ' * 41}RUT\n", ("header",))
         for index, student in enumerate(students, start=1):
             completed_flag = self._student_is_completed(student)
             if completed_flag:
@@ -1142,12 +1177,11 @@ class CastelCredCamGUI:
             else:
                 status = "Pendiente"
                 tag = "pending"
-            self.course_tree.insert(
-                "",
-                "end",
-                values=(status, f"{index:03d}. {student.display_name}", student.rut),
-                tags=(tag,),
-            )
+            line = f"{status:<9} {index:03d}. {student.display_name} | {student.rut}\n"
+            self.course_tree.insert("end", line, (tag,))
+        elapsed = (datetime.now() - start).total_seconds()
+        self.logger.debug("Course view refreshed in %.3fs with %s students.", elapsed, len(students))
+        self.course_tree.configure(state="disabled")
 
     def next_roster_student(self) -> None:
         if self.session is not None and self.session.has_roster:
@@ -1293,27 +1327,38 @@ class CastelCredCamGUI:
             self.status_var.set("No se pudo abrir la camara seleccionada.")
             return
 
-        configure_capture(cap)
+        requested_width, requested_height = configure_capture(cap)
         self.capture = cap
-        self.status_var.set(f"Camara activa: {self.current_camera_alias}")
+        actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or requested_width or 0)
+        actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or requested_height or 0)
+        self.status_var.set(f"Camara activa: {self.current_camera_alias} ({actual_width}x{actual_height})")
         self._schedule_preview()
 
-    def _schedule_preview(self) -> None:
+    def _schedule_preview(self, delay_ms: int = 30) -> None:
         if self.preview_job is not None:
             self.root.after_cancel(self.preview_job)
-        self.preview_job = self.root.after(30, self._update_preview)
+        self.preview_job = self.root.after(delay_ms, self._update_preview)
 
     def _update_preview(self) -> None:
         self.preview_job = None
         if self.capture is None:
             self._show_placeholder("Selecciona una camara para empezar.")
-            self._schedule_preview()
+            self._schedule_preview(250)
             return
+
+        if self.notebook is not None:
+            try:
+                current_tab = self.notebook.tab(self.notebook.select(), "text")
+            except Exception:
+                current_tab = ""
+            if current_tab != "Captura":
+                self._schedule_preview(500)
+                return
 
         ok, frame = self.capture.read()
         if not ok or frame is None:
             self._show_placeholder("No se pudo leer la camara.\nRevisa la conexion o cambia de fuente.")
-            self._schedule_preview()
+            self._schedule_preview(250)
             return
 
         if self.mirror_var.get():

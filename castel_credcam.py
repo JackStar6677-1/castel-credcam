@@ -44,10 +44,10 @@ TEXT_SCALE = 0.58
 TEXT_THICKNESS = 1
 TEXT_LINE = 21
 PREFERRED_CAMERA_RESOLUTIONS = [
+    (1920, 1080),
+    (1280, 960),
     (1280, 720),
     (960, 540),
-    (1280, 960),
-    (1920, 1080),
     (640, 480),
     (640, 360),
 ]
@@ -97,6 +97,15 @@ class PhotoRecord:
     course: str
     timestamp: str
     rut: str = ""
+
+
+def _photo_record_key(record: PhotoRecord) -> tuple[str, str, str, str]:
+    return (
+        record.filename.strip(),
+        record.student_name.strip(),
+        record.course.strip(),
+        record.rut.strip(),
+    )
 
 
 @dataclass
@@ -347,8 +356,16 @@ def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
                 )
             except (KeyError, TypeError, ValueError):
                 continue
-    records.sort(key=lambda item: item.id)
-    return records
+    deduped: List[PhotoRecord] = []
+    seen_keys: set[tuple[str, str, str, str, str]] = set()
+    for record in records:
+        key = _photo_record_key(record)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(record)
+    deduped.sort(key=lambda item: item.id)
+    return deduped
 
 
 def ensure_csv_exists(csv_path: Path) -> None:
