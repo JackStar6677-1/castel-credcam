@@ -106,7 +106,7 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
     (640, 360),
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
-FACE_DETECT_MAX_WIDTH = 960
+FACE_DETECT_MAX_WIDTH = 1600
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -1970,8 +1970,8 @@ class CastelCredCamQt(QMainWindow):
         roi = gray[y : y + h, x : x + w]
         if roi.size == 0:
             return []
-        eye_min_w = max(14, w // 8)
-        eye_min_h = max(10, h // 10)
+        eye_min_w = max(12, w // 10)
+        eye_min_h = max(8, h // 12)
         eye_centers: list[tuple[int, int]] = []
         for cascade in self.eye_cascades:
             if cascade.empty():
@@ -2034,8 +2034,9 @@ class CastelCredCamQt(QMainWindow):
             if cascade.empty():
                 continue
             for scale_factor, min_neighbors, min_size in (
-                (1.04, 4, (54, 54)),
-                (1.08, 5, (66, 66)),
+                (1.03, 3, (28, 28)),
+                (1.05, 4, (40, 40)),
+                (1.08, 5, (60, 60)),
             ):
                 faces = cascade.detectMultiScale(
                     gray,
@@ -2064,7 +2065,7 @@ class CastelCredCamQt(QMainWindow):
         height, width = frame.shape[:2]
         search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
         if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
-            roi = self._expand_box(self.current_face_box, width, height, scale=1.85, pad_x=24, pad_y=24)
+            roi = self._expand_box(self.current_face_box, width, height, scale=2.15, pad_x=32, pad_y=32)
             x1, y1, x2, y2 = roi
             search_frames.insert(0, (frame[y1:y2, x1:x2], False, (x1, y1)))
 
