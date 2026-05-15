@@ -90,6 +90,9 @@ TEXT_PRIMARY = "#F7F1FF"
 TEXT_MUTED = "#D8C8F2"
 SUCCESS = "#6EE7B7"
 DANGER = "#FF7A90"
+CROP_MIN_HEIGHT = 220
+FACE_DETECT_MAX_WIDTH = 960
+FACE_HOLD_FRAMES = 6
 
 
 @dataclass
@@ -1480,8 +1483,8 @@ class CastelCredCamGUI:
         roi = gray[y : y + h, x : x + w]
         if roi.size == 0:
             return []
-        eye_min_w = max(18, w // 7)
-        eye_min_h = max(12, h // 8)
+        eye_min_w = max(14, w // 8)
+        eye_min_h = max(10, h // 10)
         eye_centers: list[tuple[int, int]] = []
         for cascade in self.eye_cascades:
             if cascade.empty():
@@ -1513,7 +1516,7 @@ class CastelCredCamGUI:
         center_bias = 1.0 - min(1.0, (abs(cx - width / 2) / max(1, width)) * 1.15 + (abs(cy - height * 0.42) / max(1, height)) * 0.55)
         aspect = w / max(1, h)
         aspect_penalty = 1.0 - min(0.38, abs(aspect - 0.78) * 0.16)
-        eye_bonus = 1.0 + (0.18 * min(2, eye_count))
+        eye_bonus = 1.0 + (0.22 * min(2, eye_count))
         return area * max(0.2, center_bias) * aspect_penalty * eye_bonus
 
     def _detect_face_candidates(self, frame, mirrored: bool = False, offset: tuple[int, int] = (0, 0)) -> list[tuple[int, int, int, int]]:
@@ -1522,9 +1525,9 @@ class CastelCredCamGUI:
         height, width = frame.shape[:2]
         detect_frame = frame
         scale = 1.0
-        if width > 720:
-            scale = 720 / width
-            detect_frame = cv2.resize(frame, (720, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+        if width > FACE_DETECT_MAX_WIDTH:
+            scale = FACE_DETECT_MAX_WIDTH / width
+            detect_frame = cv2.resize(frame, (FACE_DETECT_MAX_WIDTH, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
         gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
         candidates: list[tuple[int, int, int, int]] = []
@@ -1580,8 +1583,8 @@ class CastelCredCamGUI:
             return None
         height, width = frame.shape[:2]
         search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
-        if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
-            x1, y1, x2, y2 = self._expand_box(self.current_face_box, width, height, scale=1.75, pad_x=20, pad_y=20)
+        if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
+            x1, y1, x2, y2 = self._expand_box(self.current_face_box, width, height, scale=1.95, pad_x=26, pad_y=26)
             search_frames.insert(0, (frame[y1:y2, x1:x2], False, (x1, y1)))
 
         candidates: list[tuple[int, int, int, int]] = []
@@ -1593,7 +1596,7 @@ class CastelCredCamGUI:
                 break
 
         if not candidates:
-            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 return self.current_face_box
             self.current_face_box = None
             self.current_eye_centers = []
@@ -1610,7 +1613,7 @@ class CastelCredCamGUI:
                 continue
             eyes = self._detect_eyes_in_face(gray, (x, y, w, h))
             score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
-            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 prev_x, prev_y, prev_w, prev_h = self.current_face_box
                 prev_cx = prev_x + prev_w / 2
                 prev_cy = prev_y + prev_h / 2
@@ -1624,7 +1627,7 @@ class CastelCredCamGUI:
                 best_eyes = eyes
 
         if best_face is None:
-            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 return self.current_face_box
             self.current_face_box = None
             self.current_eye_centers = []
@@ -1650,18 +1653,18 @@ class CastelCredCamGUI:
             fx, fy, fw, fh = face_box
             face_cx = fx + fw / 2
             face_cy = fy + fh / 2
-            crop_h = max(int(fh * 3.05), int(height * 0.68))
+            crop_h = max(int(fh * 2.70), int(height * 0.62))
             crop_h = min(crop_h, max_crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = int(face_cx - crop_w / 2)
             if eye_centers:
                 eye_y = sum(pt[1] for pt in eye_centers) / len(eye_centers)
-                y1 = int(eye_y - crop_h * 0.30)
+                y1 = int(eye_y - crop_h * 0.26)
             else:
-                y1 = int(face_cy - crop_h * 0.37)
+                y1 = int(face_cy - crop_h * 0.34)
         else:
-            crop_h = int(max_crop_h * 0.96)
-            crop_h = max(260, crop_h)
+            crop_h = int(max_crop_h * 0.94)
+            crop_h = max(CROP_MIN_HEIGHT, crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = (width - crop_w) // 2
             y1 = (height - crop_h) // 2
@@ -1696,7 +1699,7 @@ class CastelCredCamGUI:
         ):
             return self.stable_crop_box
 
-        alpha = 0.12
+        alpha = 0.24
         prev_cx = (prev_x1 + prev_x2) / 2
         prev_cy = (prev_y1 + prev_y2) / 2
         next_cx = (next_x1 + next_x2) / 2
@@ -1716,7 +1719,7 @@ class CastelCredCamGUI:
         self.stable_crop_box = blended
         return blended
 
-    def _crop_frame_with_box(self, frame, crop_box: tuple[int, int, int, int], output_size: tuple[int, int] = (900, 1200)):
+    def _crop_frame_with_box(self, frame, crop_box: tuple[int, int, int, int], output_size: tuple[int, int] = (1500, 2000)):
         x1, y1, x2, y2 = crop_box
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:

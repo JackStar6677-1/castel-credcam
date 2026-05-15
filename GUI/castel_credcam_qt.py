@@ -106,9 +106,9 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
     (640, 360),
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
-FACE_DETECT_MAX_WIDTH = 720
-FACE_HOLD_FRAMES = 4
-CROP_MIN_HEIGHT = 260
+FACE_DETECT_MAX_WIDTH = 960
+FACE_HOLD_FRAMES = 6
+CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
 CROP_MANUAL_ZOOM_STEP = 1.07
 
@@ -1693,7 +1693,7 @@ class CastelCredCamQt(QMainWindow):
             crop_box = self._smooth_crop_box(crop_box)
             crop_box = self._apply_manual_crop_tuning(crop_box, transformed.shape[1], transformed.shape[0])
             self.current_crop_box = crop_box
-            target_size = (900, 1200) if for_preview else None
+            target_size = (900, 1200) if for_preview else (1500, 2000)
             output = self._crop_frame_with_box(transformed, crop_box, output_size=target_size)
         else:
             self.current_crop_box = None
@@ -1723,17 +1723,17 @@ class CastelCredCamQt(QMainWindow):
             fx, fy, fw, fh = face_box
             face_cx = fx + fw / 2
             face_cy = fy + fh / 2
-            crop_h = max(int(fh * 3.15), int(height * 0.70))
+            crop_h = max(int(fh * 2.70), int(height * 0.62))
             crop_h = min(crop_h, max_crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = int(face_cx - crop_w / 2)
             if eye_centers:
                 eye_y = sum(pt[1] for pt in eye_centers) / len(eye_centers)
-                y1 = int(eye_y - crop_h * 0.30)
+                y1 = int(eye_y - crop_h * 0.26)
             else:
-                y1 = int(face_cy - crop_h * 0.38)
+                y1 = int(face_cy - crop_h * 0.34)
         else:
-            crop_h = int(max_crop_h * 0.97)
+            crop_h = int(max_crop_h * 0.94)
             crop_h = max(CROP_MIN_HEIGHT, crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = (width - crop_w) // 2
@@ -1799,7 +1799,7 @@ class CastelCredCamQt(QMainWindow):
         ):
             return self.stable_crop_box
 
-        alpha = 0.16
+        alpha = 0.24
         prev_cx = (prev_x1 + prev_x2) / 2
         prev_cy = (prev_y1 + prev_y2) / 2
         next_cx = (next_x1 + next_x2) / 2
@@ -1970,8 +1970,8 @@ class CastelCredCamQt(QMainWindow):
         roi = gray[y : y + h, x : x + w]
         if roi.size == 0:
             return []
-        eye_min_w = max(18, w // 7)
-        eye_min_h = max(12, h // 8)
+        eye_min_w = max(14, w // 8)
+        eye_min_h = max(10, h // 10)
         eye_centers: list[tuple[int, int]] = []
         for cascade in self.eye_cascades:
             if cascade.empty():
@@ -2009,7 +2009,7 @@ class CastelCredCamQt(QMainWindow):
         center_bias = 1.0 - min(1.0, (abs(cx - width / 2) / max(1, width)) * 1.15 + (abs(cy - height * 0.42) / max(1, height)) * 0.55)
         aspect = w / max(1, h)
         aspect_penalty = 1.0 - min(0.38, abs(aspect - 0.78) * 0.16)
-        eye_bonus = 1.0 + (0.18 * min(2, eye_count))
+        eye_bonus = 1.0 + (0.22 * min(2, eye_count))
         return area * max(0.2, center_bias) * aspect_penalty * eye_bonus
 
     def _detect_face_candidates(
