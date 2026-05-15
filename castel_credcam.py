@@ -27,7 +27,7 @@ BACKUP_PHOTOS_DIRNAME = "fotos_respaldo"
 TEST_FOLDER_NAME = "_pruebas"
 CSV_FILENAME = "index.csv"
 RETAKE_AUDIT_FILENAME = "retakes.csv"
-MAX_CAMERA_INDEX = 8
+MAX_CAMERA_INDEX = 12
 WARMUP_FRAMES = 12
 CAMERA_RESOLUTION_FILENAME = "camera_resolution.json"
 CAMERA_BACKENDS = [
@@ -262,6 +262,13 @@ def backend_key_from_id(backend_id: int) -> str:
         if value[1] == backend_id:
             return key
     return "any"
+
+
+def backend_name_from_id(backend_id: int) -> str:
+    for name, value in CAMERA_BACKENDS:
+        if value == backend_id:
+            return name
+    return "Automatico"
 
 
 def camera_priority(alias: str, backend_name: str) -> tuple[int, int]:
@@ -623,8 +630,14 @@ def frame_looks_usable(frame) -> bool:
     return True
 
 
-def try_open_camera(index: int) -> Tuple[Optional[cv2.VideoCapture], Optional[str], Optional[int]]:
-    attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
+def try_open_camera(
+    index: int,
+    backend_id: Optional[int] = None,
+) -> Tuple[Optional[cv2.VideoCapture], Optional[str], Optional[int]]:
+    if backend_id is None:
+        attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
+    else:
+        attempts = [(backend_name_from_id(backend_id), backend_id)]
     for backend_name, backend_id in attempts:
         capture = open_camera(index, backend_id)
         if not capture.isOpened():
@@ -656,15 +669,17 @@ def list_available_cameras(
 ) -> List[Tuple[int, str, int, str, str]]:
     cameras: List[Tuple[int, str, int, str, str]] = []
     for index in range(max_index):
-        capture, backend_name, backend_id = try_open_camera(index)
-        if capture is None or backend_name is None or backend_id is None:
-            continue
+        attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
+        for backend_name, backend_id in attempts:
+            capture, detected_backend_name, detected_backend_id = try_open_camera(index, backend_id)
+            if capture is None or detected_backend_name is None or detected_backend_id is None:
+                continue
 
-        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        alias = get_camera_alias(aliases, index, backend_id)
-        capture.release()
-        cameras.append((index, f"{alias} ({width}x{height})", backend_id, backend_name, alias))
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            alias = get_camera_alias(aliases, index, detected_backend_id)
+            capture.release()
+            cameras.append((index, f"{alias} ({width}x{height})", detected_backend_id, detected_backend_name, alias))
     cameras.sort(key=lambda item: (camera_priority(item[4], item[3]), item[0]))
     return cameras
 
@@ -679,33 +694,36 @@ def select_camera(
     if not cameras:
         raise RuntimeError("No se encontro ninguna camara disponible en Windows/OpenCV.")
 
+    camera_by_index: dict[int, list[tuple[int, str, str]]] = {}
+    for index, _label, backend_id, backend_name, alias in cameras:
+        camera_by_index.setdefault(index, []).append((backend_id, backend_name, alias))
+
     remembered_index, remembered_backend = load_last_camera(app_dir)
     if preferred_index is None and remembered_index is not None:
         preferred_index = remembered_index
         preferred_backend = remembered_backend
 
     if preferred_index is not None:
-        for index, _label, backend_id, backend_name, alias in cameras:
-            if index != preferred_index:
-                continue
-            if preferred_backend:
-                backend_key = preferred_backend.lower()
-                expected = BACKEND_LOOKUP.get(backend_key)
-                if expected and backend_id != expected[1]:
-                    continue
-            print(f"\nUsando camara preseleccionada: {alias} | indice {index} | backend: {backend_name}")
-            return index, backend_id, backend_name, alias
+        matches = camera_by_index.get(preferred_index, [])
+        if preferred_backend:
+            backend_key = preferred_backend.lower()
+            expected = BACKEND_LOOKUP.get(backend_key)
+            if expected is not None:
+                for backend_id, backend_name, alias in matches:
+                    if backend_id == expected[1]:
+                        print(f"\nUsando camara preseleccionada: {alias} | indice {preferred_index} | backend: {backend_name}")
+                        return preferred_index, backend_id, backend_name, alias
+        if matches:
+            backend_id, backend_name, alias = matches[0]
+            print(f"\nUsando camara preseleccionada: {alias} | indice {preferred_index} | backend: {backend_name}")
+            return preferred_index, backend_id, backend_name, alias
 
     print("\nCamaras detectadas:")
     for index, label, _backend_id, backend_name, _alias in cameras:
         print(f"  {index}. {label} | backend: {backend_name}")
 
-    camera_by_index = {
-        index: (backend_id, backend_name, alias)
-        for index, _label, backend_id, backend_name, alias in cameras
-    }
     default_index = cameras[0][0]
-    default_backend_id, default_backend_name, default_alias = camera_by_index[default_index]
+    default_backend_id, default_backend_name, default_alias = camera_by_index[default_index][0]
 
     while True:
         raw = input(f"Selecciona camara [{default_index}]: ").strip()
@@ -716,8 +734,11 @@ def select_camera(
         except ValueError:
             print("Debes escribir un numero de camara valido.")
             continue
-        if value in camera_by_index:
-            backend_id, backend_name, alias = camera_by_index[value]
+        matches = camera_by_index.get(value, [])
+        if matches:
+            if len(matches) > 1:
+                print(f"El indice {value} tiene varias fuentes; se usara {matches[0][2]} ({matches[0][1]}).")
+            backend_id, backend_name, alias = matches[0]
             return value, backend_id, backend_name, alias
         print("Ese indice no aparece como disponible.")
 

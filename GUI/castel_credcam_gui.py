@@ -190,8 +190,11 @@ class CastelCredCamGUI:
         self.course_total_var: Optional[tk.StringVar] = None
         self.course_current_var: Optional[tk.StringVar] = None
         self.current_face_box: Optional[tuple[int, int, int, int]] = None
+        self.current_eye_centers: list[tuple[int, int]] = []
         self.current_crop_box: Optional[tuple[int, int, int, int]] = None
         self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
+        self.frame_counter = 0
+        self.last_face_detect_frame = -9999
         self.sidebar_canvas: Optional[tk.Canvas] = None
         self.sidebar_content: Optional[ttk.Frame] = None
         self.sidebar_window_id: Optional[int] = None
@@ -209,7 +212,16 @@ class CastelCredCamGUI:
         self.notebook: Optional[ttk.Notebook] = None
         self._last_layout_profile: Optional[tuple[int, int]] = None
         self._responsive_job: Optional[str] = None
-        self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        self.face_cascades = [
+            cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
+            cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml"),
+            cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml"),
+            cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml"),
+        ]
+        self.eye_cascades = [
+            cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"),
+            cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml"),
+        ]
 
         self.mode_var = tk.StringVar(value="test")
         self.course_var = tk.StringVar(value="")
@@ -1382,10 +1394,11 @@ class CastelCredCamGUI:
         if self.mirror_var.get():
             frame = cv2.flip(frame, 1)
         transformed = self._apply_transformations(frame)
+        self.frame_counter += 1
         self.current_face_box = self._detect_primary_face(transformed)
         if self.crop_portrait_var.get():
             next_crop_box = self._compute_portrait_crop_box(
-                transformed.shape[1], transformed.shape[0], self.current_face_box
+                transformed.shape[1], transformed.shape[0], self.current_face_box, self.current_eye_centers
             )
             smoothed_box = self._smooth_crop_box(next_crop_box)
             self.current_crop_box = self._constrain_crop_box(
@@ -1434,6 +1447,113 @@ class CastelCredCamGUI:
             justify="center",
         )
 
+    def _expand_box(
+        self,
+        box: tuple[int, int, int, int],
+        width: int,
+        height: int,
+        scale: float = 1.0,
+        pad_x: int = 0,
+        pad_y: int = 0,
+    ) -> tuple[int, int, int, int]:
+        x, y, w, h = box
+        cx = x + w / 2
+        cy = y + h / 2
+        new_w = max(1, int(w * scale) + pad_x * 2)
+        new_h = max(1, int(h * scale) + pad_y * 2)
+        x1 = max(0, int(cx - new_w / 2))
+        y1 = max(0, int(cy - new_h / 2))
+        x2 = min(width, x1 + new_w)
+        y2 = min(height, y1 + new_h)
+        return x1, y1, x2, y2
+
+    def _clip_box(self, box: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = box
+        x1 = max(0, min(x1, width - 1))
+        y1 = max(0, min(y1, height - 1))
+        x2 = max(x1 + 1, min(x2, width))
+        y2 = max(y1 + 1, min(y2, height))
+        return x1, y1, x2, y2
+
+    def _detect_eyes_in_face(self, gray: np.ndarray, face_box: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+        x, y, w, h = face_box
+        roi = gray[y : y + h, x : x + w]
+        if roi.size == 0:
+            return []
+        eye_min_w = max(18, w // 7)
+        eye_min_h = max(12, h // 8)
+        eye_centers: list[tuple[int, int]] = []
+        for cascade in self.eye_cascades:
+            if cascade.empty():
+                continue
+            eyes = cascade.detectMultiScale(
+                roi,
+                scaleFactor=1.06,
+                minNeighbors=4,
+                minSize=(eye_min_w, eye_min_h),
+            )
+            for ex, ey, ew, eh in eyes:
+                eye_centers.append((x + ex + ew // 2, y + ey + eh // 2))
+            if len(eye_centers) >= 2:
+                break
+        eye_centers.sort(key=lambda pt: pt[0])
+        unique: list[tuple[int, int]] = []
+        for pt in eye_centers:
+            if not unique or abs(unique[-1][0] - pt[0]) > 12 or abs(unique[-1][1] - pt[1]) > 12:
+                unique.append(pt)
+            if len(unique) >= 2:
+                break
+        return unique
+
+    def _score_face_candidate(self, box: tuple[int, int, int, int], width: int, height: int, eye_count: int) -> float:
+        x, y, w, h = box
+        area = float(w * h)
+        cx = x + w / 2
+        cy = y + h / 2
+        center_bias = 1.0 - min(1.0, (abs(cx - width / 2) / max(1, width)) * 1.15 + (abs(cy - height * 0.42) / max(1, height)) * 0.55)
+        aspect = w / max(1, h)
+        aspect_penalty = 1.0 - min(0.38, abs(aspect - 0.78) * 0.16)
+        eye_bonus = 1.0 + (0.18 * min(2, eye_count))
+        return area * max(0.2, center_bias) * aspect_penalty * eye_bonus
+
+    def _detect_face_candidates(self, frame, mirrored: bool = False, offset: tuple[int, int] = (0, 0)) -> list[tuple[int, int, int, int]]:
+        if frame.size == 0:
+            return []
+        height, width = frame.shape[:2]
+        detect_frame = frame
+        scale = 1.0
+        if width > 720:
+            scale = 720 / width
+            detect_frame = cv2.resize(frame, (720, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        candidates: list[tuple[int, int, int, int]] = []
+        for cascade in self.face_cascades:
+            if cascade.empty():
+                continue
+            for scale_factor, min_neighbors, min_size in (
+                (1.04, 4, (54, 54)),
+                (1.08, 5, (66, 66)),
+            ):
+                faces = cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=scale_factor,
+                    minNeighbors=min_neighbors,
+                    minSize=min_size,
+                )
+                for fx, fy, fw, fh in faces:
+                    if scale != 1.0:
+                        fx = int(fx / scale)
+                        fy = int(fy / scale)
+                        fw = int(fw / scale)
+                        fh = int(fh / scale)
+                    if mirrored:
+                        fx = width - fx - fw
+                    fx += offset[0]
+                    fy += offset[1]
+                    candidates.append((fx, fy, fw, fh))
+        return candidates
+
     def _apply_transformations(self, frame):
         zoom = max(1.0, float(self.zoom_var.get()))
         if zoom > 1.01:
@@ -1454,20 +1574,73 @@ class CastelCredCamGUI:
         return frame
 
     def _detect_primary_face(self, frame) -> Optional[tuple[int, int, int, int]]:
-        if self.face_cascade.empty():
+        if self.frame_counter % 2 != 0 and self.current_face_box is not None:
+            return self.current_face_box
+        if not self.face_cascades or all(cascade.empty() for cascade in self.face_cascades):
             return None
+        height, width = frame.shape[:2]
+        search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
+        if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+            x1, y1, x2, y2 = self._expand_box(self.current_face_box, width, height, scale=1.75, pad_x=20, pad_y=20)
+            search_frames.insert(0, (frame[y1:y2, x1:x2], False, (x1, y1)))
+
+        candidates: list[tuple[int, int, int, int]] = []
+        for search_frame, mirrored, offset in search_frames:
+            if search_frame.size == 0:
+                continue
+            candidates.extend(self._detect_face_candidates(search_frame, mirrored=mirrored, offset=offset))
+            if candidates:
+                break
+
+        if not candidates:
+            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+                return self.current_face_box
+            self.current_face_box = None
+            self.current_eye_centers = []
+            return None
+
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=7, minSize=(90, 90))
-        if len(faces) == 0:
+        gray = cv2.equalizeHist(gray)
+        best_face: Optional[tuple[int, int, int, int]] = None
+        best_eyes: list[tuple[int, int]] = []
+        best_score = -1.0
+        for box in candidates:
+            x, y, w, h = self._clip_box(box, width, height)
+            if w < 36 or h < 36:
+                continue
+            eyes = self._detect_eyes_in_face(gray, (x, y, w, h))
+            score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
+            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+                prev_x, prev_y, prev_w, prev_h = self.current_face_box
+                prev_cx = prev_x + prev_w / 2
+                prev_cy = prev_y + prev_h / 2
+                cur_cx = x + w / 2
+                cur_cy = y + h / 2
+                distance = abs(cur_cx - prev_cx) + abs(cur_cy - prev_cy)
+                score -= distance * 3.0
+            if score > best_score:
+                best_score = score
+                best_face = (x, y, w, h)
+                best_eyes = eyes
+
+        if best_face is None:
+            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= 4:
+                return self.current_face_box
+            self.current_face_box = None
+            self.current_eye_centers = []
             return None
-        fx, fy, fw, fh = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
-        return int(fx), int(fy), int(fw), int(fh)
+
+        self.current_face_box = best_face
+        self.current_eye_centers = best_eyes
+        self.last_face_detect_frame = self.frame_counter
+        return self.current_face_box
 
     def _compute_portrait_crop_box(
         self,
         width: int,
         height: int,
         face_box: Optional[tuple[int, int, int, int]],
+        eye_centers: Optional[list[tuple[int, int]]] = None,
     ) -> tuple[int, int, int, int]:
         target_ratio = 3 / 4
         max_crop_h = min(height, int(width / target_ratio))
@@ -1477,13 +1650,18 @@ class CastelCredCamGUI:
             fx, fy, fw, fh = face_box
             face_cx = fx + fw / 2
             face_cy = fy + fh / 2
-            crop_h = max(int(fh * 2.45), int(height * 0.58))
+            crop_h = max(int(fh * 3.05), int(height * 0.68))
             crop_h = min(crop_h, max_crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = int(face_cx - crop_w / 2)
-            y1 = int(face_cy - crop_h * 0.36)
+            if eye_centers:
+                eye_y = sum(pt[1] for pt in eye_centers) / len(eye_centers)
+                y1 = int(eye_y - crop_h * 0.30)
+            else:
+                y1 = int(face_cy - crop_h * 0.37)
         else:
-            crop_h = int(max_crop_h * 0.9)
+            crop_h = int(max_crop_h * 0.96)
+            crop_h = max(260, crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = (width - crop_w) // 2
             y1 = (height - crop_h) // 2
@@ -1543,7 +1721,10 @@ class CastelCredCamGUI:
         crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return frame
-        return cv2.resize(crop, output_size, interpolation=cv2.INTER_CUBIC)
+        crop_h, crop_w = crop.shape[:2]
+        target_w, target_h = output_size
+        interpolation = cv2.INTER_AREA if target_w < crop_w or target_h < crop_h else cv2.INTER_CUBIC
+        return cv2.resize(crop, output_size, interpolation=interpolation)
 
     def _constrain_crop_box(
         self,

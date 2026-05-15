@@ -17,7 +17,7 @@ def main() -> None:
     output_dir.mkdir(exist_ok=True)
 
     print("Diagnostico de camaras OpenCV\n")
-    for index in range(6):
+    for index in range(12):
         for backend_name, backend_id in BACKENDS:
             cap = cv2.VideoCapture(index, backend_id)
             opened = cap.isOpened()
