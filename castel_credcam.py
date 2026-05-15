@@ -46,9 +46,14 @@ TEXT_SCALE = 0.58
 TEXT_THICKNESS = 1
 TEXT_LINE = 21
 PREFERRED_CAMERA_RESOLUTIONS = [
+    (2560, 1440),
+    (1920, 1080),
+    (1600, 1200),
     (1280, 960),
+    (1280, 720),
     (960, 720),
     (640, 480),
+    (640, 360),
 ]
 CAMERA_ALIASES_FILENAME = "camera_aliases.json"
 LAST_CAMERA_FILENAME = "last_camera.json"

@@ -96,9 +96,14 @@ DONE_BG = "#183122"
 CURRENT_BG = "#584010"
 PENDING_BG = "#2B1640"
 COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
+    (2560, 1440),
+    (1920, 1080),
+    (1600, 1200),
     (1280, 960),
+    (1280, 720),
     (960, 720),
     (640, 480),
+    (640, 360),
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
 FACE_DETECT_MAX_WIDTH = 720
