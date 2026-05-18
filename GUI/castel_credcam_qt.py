@@ -297,6 +297,8 @@ class CameraThread(QThread):
         self.backend_id = backend_id
         self.preferred_resolution = preferred_resolution
         self._capture: Optional[cv2.VideoCapture] = None
+        self._frame_lock = threading.Lock()
+        self._latest_frame: Optional[np.ndarray] = None
 
     def run(self) -> None:
         try:
@@ -330,11 +332,11 @@ class CameraThread(QThread):
                     continue
                 fail_count = 0
                 frame_count += 1
+                with self._frame_lock:
+                    self._latest_frame = frame
                 if frame_count == 1 or frame_count % 60 == 0:
                     self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
-                if frame_count % 2 == 0:
-                    self.frame_ready.emit(frame)
-                self.msleep(60)
+                self.msleep(90)
         except Exception as exc:
             self.camera_error.emit(str(exc))
         finally:
@@ -344,6 +346,12 @@ class CameraThread(QThread):
                 except Exception:
                     pass
                 self._capture = None
+
+    def latest_frame(self) -> Optional[np.ndarray]:
+        with self._frame_lock:
+            if self._latest_frame is None:
+                return None
+            return self._latest_frame.copy()
 
     def stop(self) -> None:
         self.requestInterruption()
@@ -412,7 +420,7 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
-        self.preview_render_timer.setInterval(100)
+        self.preview_render_timer.setInterval(140)
         self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
@@ -1134,7 +1142,6 @@ class CastelCredCamQt(QMainWindow):
             selected_resolution,
         )
         self.camera_thread = CameraThread(self.camera_index, self.backend_id, selected_resolution, self)
-        self.camera_thread.frame_ready.connect(self._on_frame_ready)
         self.camera_thread.camera_message.connect(self._on_camera_message)
         self.camera_thread.camera_error.connect(self._on_camera_error)
         self.camera_thread.start()
@@ -1181,6 +1188,14 @@ class CastelCredCamQt(QMainWindow):
         self.preview_label.clear()
         self.preview_label.setText(message)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def _pull_latest_preview_frame(self) -> Optional[np.ndarray]:
+        if self.camera_thread is None:
+            return self.latest_frame
+        frame = self.camera_thread.latest_frame()
+        if frame is not None:
+            self.latest_frame = frame
+        return self.latest_frame
 
     def _on_mode_changed(self) -> None:
         self.mode = "course" if self.course_radio.isChecked() else "test"
@@ -1722,6 +1737,7 @@ class CastelCredCamQt(QMainWindow):
         self._sync_session_ui()
         self._refresh_course_view(force=True)
         self._render_preview()
+        self._schedule_preview_render(immediate=True)
 
     def close_session(self) -> None:
         if self.session is None:
@@ -2200,10 +2216,16 @@ class CastelCredCamQt(QMainWindow):
         return best_face
 
     def _render_preview(self) -> None:
-        if self.latest_frame is None:
+        frame_source = self._pull_latest_preview_frame()
+        if frame_source is None:
             self._show_preview_message("Esperando señal de camara...")
             return
-        frame = self._render_preview_frame(self.latest_frame)
+        self.frame_counter += 1
+        if not self._preview_frame_received:
+            self._preview_frame_received = True
+            self.first_frame_timer.stop()
+            self.logger.info("First preview frame received. shape=%s", getattr(frame_source, "shape", None))
+        frame = self._render_preview_frame(frame_source)
 
         if self.guide_check.isChecked() or self.face_check.isChecked():
             info_lines = self._preview_status_lines()
@@ -2320,19 +2342,6 @@ class CastelCredCamQt(QMainWindow):
                 cv2.LINE_AA,
             )
 
-    def _on_frame_ready(self, frame: object) -> None:
-        try:
-            self.latest_frame = frame
-        except Exception:
-            self.latest_frame = frame
-        self.frame_counter += 1
-        if not self._preview_frame_received:
-            self._preview_frame_received = True
-            self.first_frame_timer.stop()
-            self.logger.info("First preview frame received. shape=%s", getattr(self.latest_frame, "shape", None))
-        if self.tabs.currentWidget() == self.capture_tab or self.countdown_remaining > 0:
-            self._schedule_preview_render()
-
     def _schedule_preview_render(self, immediate: bool = False) -> None:
         if self.preview_render_timer.isActive():
             if immediate:
@@ -2348,6 +2357,9 @@ class CastelCredCamQt(QMainWindow):
         except Exception as exc:
             self.logger.exception("Preview render failed: %s", exc)
             self._show_preview_message(f"Error al renderizar vista: {exc}")
+        finally:
+            if self.tabs.currentWidget() == self.capture_tab or self.countdown_remaining > 0:
+                self._schedule_preview_render()
 
     def _on_first_frame_timeout(self) -> None:
         if self._preview_frame_received:
@@ -2383,6 +2395,7 @@ class CastelCredCamQt(QMainWindow):
             self.status_label.setText("La nomina ya termino.")
             return
 
+        self.frame_counter += 1
         transformed = self._apply_settings_to_frame(frame, for_preview=False)
         record = PhotoRecord(
             id=self.session.next_id,
@@ -2435,7 +2448,8 @@ class CastelCredCamQt(QMainWindow):
             self.status_label.setText("Primero inicia una sesion.")
             self.logger.warning("Capture requested without active session.")
             return
-        if self.latest_frame is None:
+        frame = self._pull_latest_preview_frame()
+        if frame is None:
             self.status_label.setText("No hay frame de camara disponible.")
             return
 
@@ -2447,14 +2461,15 @@ class CastelCredCamQt(QMainWindow):
             self._schedule_preview_render(immediate=True)
             return
 
-        self._save_capture(self.latest_frame.copy())
+        self._save_capture(frame.copy())
 
     def _countdown_tick(self) -> None:
         if self.countdown_remaining <= 1:
             self.countdown_timer.stop()
             self.countdown_remaining = 0
-            if self.latest_frame is not None:
-                self._save_capture(self.latest_frame.copy())
+            frame = self._pull_latest_preview_frame()
+            if frame is not None:
+                self._save_capture(frame.copy())
             return
         self.countdown_remaining -= 1
         self.status_label.setText(f"Captura en {self.countdown_remaining}s")
