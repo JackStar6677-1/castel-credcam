@@ -96,18 +96,18 @@ DONE_BG = "#183122"
 CURRENT_BG = "#584010"
 PENDING_BG = "#2B1640"
 COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
-    (2560, 1440),
+    (1280, 720),
     (1920, 1080),
     (1600, 1200),
     (1280, 960),
-    (1280, 720),
     (960, 720),
     (640, 480),
     (640, 360),
+    (2560, 1440),
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
-FACE_DETECT_MAX_WIDTH = 1600
-PREVIEW_MAX_WIDTH = 960
+FACE_DETECT_MAX_WIDTH = 1280
+PREVIEW_MAX_WIDTH = 720
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -186,9 +186,13 @@ def _rotate_frame(frame: np.ndarray, rotation_label: str) -> np.ndarray:
 
 
 def _cv_to_qpixmap(frame: np.ndarray) -> QPixmap:
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    height, width, channels = rgb.shape
-    image = QImage(rgb.data, width, height, channels * width, QImage.Format.Format_RGB888).copy()
+    height, width, channels = frame.shape
+    if hasattr(QImage.Format, "Format_BGR888"):
+        image = QImage(frame.data, width, height, channels * width, QImage.Format.Format_BGR888).copy()
+    else:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width, channels = rgb.shape
+        image = QImage(rgb.data, width, height, channels * width, QImage.Format.Format_RGB888).copy()
     return QPixmap.fromImage(image)
 
 
@@ -326,9 +330,9 @@ class CameraThread(QThread):
                 frame_count += 1
                 if frame_count == 1 or frame_count % 60 == 0:
                     self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
-                if frame_count % 2 == 0:
+                if frame_count % 3 == 0:
                     self.frame_ready.emit(frame)
-                self.msleep(40)
+                self.msleep(60)
         except Exception as exc:
             self.camera_error.emit(str(exc))
         finally:
@@ -403,7 +407,7 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
-        self.preview_render_timer.setInterval(66)
+        self.preview_render_timer.setInterval(100)
         self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
@@ -2160,7 +2164,7 @@ class CastelCredCamQt(QMainWindow):
         scaled = pixmap.scaled(
             self.preview_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self.preview_label.setPixmap(scaled)
         self.preview_label.setText("")
@@ -2186,7 +2190,7 @@ class CastelCredCamQt(QMainWindow):
         eye_centers: list[tuple[int, int]] = []
         if detect_face:
             self.preview_detection_tick += 1
-            refresh_detection = self.preview_face_box is None or self.preview_detection_tick % 3 == 0
+            refresh_detection = self.preview_face_box is None or self.preview_detection_tick % 6 == 0
             if refresh_detection:
                 face_box = self._detect_primary_face(transformed, update_state=False)
                 if face_box is not None:
@@ -2297,7 +2301,7 @@ class CastelCredCamQt(QMainWindow):
 
     def _on_frame_ready(self, frame: object) -> None:
         try:
-            self.latest_frame = frame.copy() if hasattr(frame, "copy") else frame
+            self.latest_frame = frame
         except Exception:
             self.latest_frame = frame
         self.frame_counter += 1
