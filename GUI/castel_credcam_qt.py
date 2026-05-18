@@ -603,8 +603,10 @@ class CastelCredCamQt(QMainWindow):
         title_layout.setSpacing(2)
         title = QLabel(APP_TITLE)
         title.setObjectName("AppTitle")
+        title.setWordWrap(True)
         subtitle = QLabel("Captura por curso, roster y respaldo espejo")
         subtitle.setObjectName("AppSubtitle")
+        subtitle.setWordWrap(True)
         title_layout.addWidget(title)
         title_layout.addWidget(subtitle)
         title_layout.addStretch(1)
@@ -690,7 +692,7 @@ class CastelCredCamQt(QMainWindow):
         self.source_list = QListWidget()
         self.source_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.source_list.currentRowChanged.connect(self._on_source_selected)
-        self.source_list.setMinimumHeight(112)
+        self.source_list.setMinimumHeight(92)
         camera_layout.addWidget(self.source_list)
 
         self.camera_combo = QComboBox()
@@ -826,7 +828,7 @@ class CastelCredCamQt(QMainWindow):
         info_layout.addWidget(self._card_title("Info"))
         self.info_text = QPlainTextEdit()
         self.info_text.setReadOnly(True)
-        self.info_text.setMaximumHeight(128)
+        self.info_text.setMaximumHeight(112)
         info_layout.addWidget(self.info_text)
         sidebar_layout.addWidget(self.info_card)
 
@@ -843,11 +845,13 @@ class CastelCredCamQt(QMainWindow):
         self.main_splitter.setStretchFactor(1, 2)
         self.main_splitter.setSizes([800, 340])
 
+        self.root_splitter = splitter
         splitter.addWidget(self.sidebar_scroll)
         splitter.addWidget(self.main_splitter)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([300, 1300])
+        splitter.setChildrenCollapsible(False)
+        self._apply_responsive_layout()
 
         self.status_label = QLabel("Listo para iniciar. Selecciona camara, carga lista y abre sesion.")
         self.status_label.setObjectName("Status")
@@ -865,7 +869,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_frame = QFrame()
         self.preview_frame.setObjectName("CapturePanel")
         self.preview_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.preview_frame.setMinimumHeight(540)
+        self.preview_frame.setMinimumHeight(500)
         preview_layout = QVBoxLayout(self.preview_frame)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
@@ -977,6 +981,23 @@ class CastelCredCamQt(QMainWindow):
         self.crop_tuning_label.setText(
             f"Ajuste fino: x={self.crop_manual_dx:+.2f} y={self.crop_manual_dy:+.2f} zoom={self.crop_manual_zoom:.2f}"
         )
+
+    def _apply_responsive_layout(self) -> None:
+        if not hasattr(self, "root_splitter") or not hasattr(self, "main_splitter"):
+            return
+
+        window_width = max(1280, self.width())
+        window_height = max(820, self.height())
+
+        sidebar_width = int(window_width * 0.23)
+        sidebar_width = max(300, min(420, sidebar_width))
+        main_width = max(720, window_width - sidebar_width - 24)
+        self.root_splitter.setSizes([sidebar_width, main_width])
+
+        preview_height = int(window_height * 0.64)
+        preview_height = max(520, min(840, preview_height))
+        course_height = max(280, window_height - preview_height - 210)
+        self.main_splitter.setSizes([preview_height, course_height])
 
     def _reset_crop_tuning(self) -> None:
         self.crop_manual_dx = 0.0
@@ -2625,6 +2646,7 @@ class CastelCredCamQt(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._apply_responsive_layout()
         self._on_resize()
 
     def closeEvent(self, event) -> None:  # noqa: N802
