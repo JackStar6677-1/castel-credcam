@@ -48,6 +48,13 @@ TEXT_LINE = 21
 AUTOFRAME_TARGET_SIZE = (1500, 2000)
 AUTOFRAME_MAX_DETECT_WIDTH = 1280
 AUTOFRAME_MIN_FACE_SIZE = 36
+AUTOFRAME_MIN_EYE_W = 12
+AUTOFRAME_MIN_EYE_H = 8
+AUTOFRAME_FACE_EXPANSION = 3.15
+AUTOFRAME_FACE_HEIGHT_RATIO = 0.74
+AUTOFRAME_EYE_TOP_RATIO = 0.30
+AUTOFRAME_CHEST_MARGIN_RATIO = 0.18
+AUTOFRAME_FALLBACK_HEIGHT_RATIO = 0.95
 PREFERRED_CAMERA_RESOLUTIONS = [
     (1280, 720),
     (1920, 1080),
@@ -651,6 +658,7 @@ def _autoframe_score_face(
     box: tuple[int, int, int, int],
     width: int,
     height: int,
+    eye_count: int = 0,
 ) -> float:
     x, y, w, h = box
     area = float(w * h)
@@ -662,7 +670,43 @@ def _autoframe_score_face(
     )
     aspect = w / max(1, h)
     aspect_penalty = 1.0 - min(0.32, abs(aspect - 0.78) * 0.15)
-    return area * max(0.2, center_bias) * aspect_penalty
+    eye_bonus = 1.0 + (0.20 * min(2, eye_count))
+    size_bonus = min(1.8, 0.55 + (area / max(1, width * height)) * 5.0)
+    return area * max(0.2, center_bias) * aspect_penalty * eye_bonus * size_bonus
+
+
+def _autoframe_detect_eyes(gray: np.ndarray, face_box: tuple[int, int, int, int]) -> list[tuple[int, int]]:
+    x, y, w, h = face_box
+    roi = gray[y : y + h, x : x + w]
+    if roi.size == 0:
+        return []
+
+    eye_centers: list[tuple[int, int]] = []
+    for cascade in (
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"),
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml"),
+    ):
+        if cascade.empty():
+            continue
+        eyes = cascade.detectMultiScale(
+            roi,
+            scaleFactor=1.06,
+            minNeighbors=4,
+            minSize=(max(AUTOFRAME_MIN_EYE_W, w // 12), max(AUTOFRAME_MIN_EYE_H, h // 14)),
+        )
+        for ex, ey, ew, eh in eyes:
+            eye_centers.append((x + ex + ew // 2, y + ey + eh // 2))
+        if len(eye_centers) >= 2:
+            break
+
+    eye_centers.sort(key=lambda pt: pt[0])
+    unique: list[tuple[int, int]] = []
+    for pt in eye_centers:
+        if not unique or abs(unique[-1][0] - pt[0]) > 12 or abs(unique[-1][1] - pt[1]) > 12:
+            unique.append(pt)
+        if len(unique) >= 2:
+            break
+    return unique
 
 
 def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, int]]:
@@ -684,21 +728,26 @@ def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, i
         if cascade.empty():
             continue
         for search_frame, mirrored in ((gray, False), (cv2.flip(gray, 1), True)):
-            faces = cascade.detectMultiScale(
-                search_frame,
-                scaleFactor=1.04,
-                minNeighbors=4,
-                minSize=(AUTOFRAME_MIN_FACE_SIZE, AUTOFRAME_MIN_FACE_SIZE),
-            )
-            for fx, fy, fw, fh in faces:
-                if mirrored:
-                    fx = search_frame.shape[1] - fx - fw
-                if scale != 1.0:
-                    fx = int(fx / scale)
-                    fy = int(fy / scale)
-                    fw = int(fw / scale)
-                    fh = int(fh / scale)
-                candidates.append((fx, fy, fw, fh))
+            for scale_factor, min_neighbors, min_size in (
+                (1.03, 3, (28, 28)),
+                (1.05, 4, (36, 36)),
+                (1.08, 5, (52, 52)),
+            ):
+                faces = cascade.detectMultiScale(
+                    search_frame,
+                    scaleFactor=scale_factor,
+                    minNeighbors=min_neighbors,
+                    minSize=min_size,
+                )
+                for fx, fy, fw, fh in faces:
+                    if mirrored:
+                        fx = search_frame.shape[1] - fx - fw
+                    if scale != 1.0:
+                        fx = int(fx / scale)
+                        fy = int(fy / scale)
+                        fw = int(fw / scale)
+                        fh = int(fh / scale)
+                    candidates.append((fx, fy, fw, fh))
 
     if not candidates:
         return None
@@ -712,13 +761,18 @@ def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, i
     return x, y, w, h
 
 
-def _autoframe_build_crop_box(width: int, height: int, face_box: Optional[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+def _autoframe_build_crop_box(
+    width: int,
+    height: int,
+    face_box: Optional[tuple[int, int, int, int]],
+    eye_centers: Optional[list[tuple[int, int]]] = None,
+) -> tuple[int, int, int, int]:
     target_ratio = 3 / 4
     max_crop_h = min(height, int(width / target_ratio))
     max_crop_w = int(max_crop_h * target_ratio)
 
     if face_box is None:
-        crop_h = max(220, int(max_crop_h * 0.95))
+        crop_h = max(220, int(max_crop_h * AUTOFRAME_FALLBACK_HEIGHT_RATIO))
         crop_w = int(crop_h * target_ratio)
         x1 = (width - crop_w) // 2
         y1 = (height - crop_h) // 2
@@ -727,22 +781,61 @@ def _autoframe_build_crop_box(width: int, height: int, face_box: Optional[tuple[
         face_cx = fx + fw / 2
         face_cy = fy + fh / 2
 
-        crop_h = max(int(fh * 4.1), int(height * 0.76))
+        crop_h = max(int(fh * AUTOFRAME_FACE_EXPANSION), int(height * AUTOFRAME_FACE_HEIGHT_RATIO))
         crop_h = min(crop_h, max_crop_h)
         crop_w = int(crop_h * target_ratio)
 
         x1 = int(face_cx - crop_w / 2)
-        y1 = int(face_cy - crop_h * 0.42)
+        y1 = int(face_cy - crop_h * 0.40)
 
         if fx < width * 0.30:
-            x1 = int(face_cx - crop_w * 0.40)
+            x1 = int(face_cx - crop_w * 0.38)
         elif fx > width * 0.70:
-            x1 = int(face_cx - crop_w * 0.60)
+            x1 = int(face_cx - crop_w * 0.62)
 
-        if fy < height * 0.28:
-            y1 = int(face_cy - crop_h * 0.30)
+        if eye_centers:
+            eye_y = sum(pt[1] for pt in eye_centers) / len(eye_centers)
+            y1 = int(eye_y - crop_h * AUTOFRAME_EYE_TOP_RATIO)
+        elif fy < height * 0.28:
+            y1 = int(face_cy - crop_h * 0.32)
         else:
-            y1 = int(face_cy - crop_h * 0.38)
+            y1 = int(face_cy - crop_h * 0.40)
+
+        chest_margin = max(18, int(fh * AUTOFRAME_CHEST_MARGIN_RATIO))
+        y1 = min(y1, height - crop_h + chest_margin)
+        x1 = min(x1, width - crop_w + max(12, int(fw * 0.18)))
+
+        # Pequeña búsqueda alrededor del rostro para centrar mejor cuando la detección
+        # cae corrida a un lado. Esto ayuda mucho con fotos de aula y encuadres apurados.
+        search_offsets = (-0.16, -0.08, 0.0, 0.08, 0.16)
+        best_box = (x1, y1, x1 + crop_w, y1 + crop_h)
+        best_score = -1.0
+        for dx in search_offsets:
+            for dy in (-0.08, 0.0, 0.08):
+                cand_x1 = int(face_cx - crop_w / 2 + crop_w * dx)
+                cand_y1 = int(y1 + crop_h * dy)
+                cand_x1 = max(0, min(cand_x1, width - crop_w))
+                cand_y1 = max(0, min(cand_y1, height - crop_h))
+                cand_box = (cand_x1, cand_y1, cand_x1 + crop_w, cand_y1 + crop_h)
+                face_left = fx
+                face_top = fy
+                face_right = fx + fw
+                face_bottom = fy + fh
+                margin_left = max(0, face_left - cand_x1)
+                margin_top = max(0, face_top - cand_y1)
+                margin_right = max(0, (cand_x1 + crop_w) - face_right)
+                margin_bottom = max(0, (cand_y1 + crop_h) - face_bottom)
+                face_center_bias = 1.0 - min(
+                    1.0,
+                    (abs((face_cx - cand_x1) - crop_w * 0.5) / max(1, crop_w)) * 1.2
+                    + (abs((face_cy - cand_y1) - crop_h * 0.40) / max(1, crop_h)) * 0.9,
+                )
+                room_bonus = min(1.6, (margin_top + margin_bottom * 1.2 + margin_left * 0.7 + margin_right * 0.7) / max(1, crop_h))
+                score = face_center_bias + room_bonus
+                if score > best_score:
+                    best_score = score
+                    best_box = cand_box
+        x1, y1, x2, y2 = best_box
 
     crop_w = min(crop_w, max_crop_w)
     crop_h = min(crop_h, height)
@@ -773,8 +866,12 @@ def autoframe_photo_file(image_path: Path, backup_path: Optional[Path] = None) -
             shutil.copy2(image_path, backup_path)
 
         face_box = _autoframe_detect_face(image)
-        crop_box = _autoframe_build_crop_box(image.shape[1], image.shape[0], face_box)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        eye_centers = _autoframe_detect_eyes(gray, face_box) if face_box is not None else []
+        crop_box = _autoframe_build_crop_box(image.shape[1], image.shape[0], face_box, eye_centers)
         framed = _autoframe_crop_frame(image, crop_box)
+        if framed.size == 0:
+            return False, f"Crop vacio para {image_path.name}"
 
         tmp_main = image_path.with_name(f"{image_path.stem}.__autoframe_tmp{image_path.suffix}")
         if not cv2.imwrite(str(tmp_main), framed):
