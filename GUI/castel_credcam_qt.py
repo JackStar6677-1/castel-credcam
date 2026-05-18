@@ -475,10 +475,10 @@ class CastelCredCamQt(QMainWindow):
                 background: #19181E;
                 border: 1px solid {CARD_EDGE};
                 border-radius: 10px;
-                padding: 4px;
+                padding: 3px;
             }}
             QListWidget::item {{
-                padding: 8px 10px;
+                padding: 6px 8px;
                 border-radius: 8px;
             }}
             QListWidget::item:selected {{
@@ -515,7 +515,7 @@ class CastelCredCamQt(QMainWindow):
                 color: {TEXT_PRIMARY};
                 border: 1px solid #49445A;
                 border-radius: 8px;
-                padding: 7px 8px;
+                padding: 6px 7px;
             }}
             QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{
                 border: 1px solid {ACCENT_PURPLE};
@@ -528,8 +528,8 @@ class CastelCredCamQt(QMainWindow):
                 background: {ACCENT_PURPLE};
                 color: white;
                 border: none;
-                border-radius: 10px;
-                padding: 10px 12px;
+                border-radius: 8px;
+                padding: 7px 10px;
                 font-weight: 700;
             }}
             QPushButton:hover {{
@@ -564,7 +564,7 @@ class CastelCredCamQt(QMainWindow):
             QTabBar::tab {{
                 background: #1F1E25;
                 color: {TEXT_MUTED};
-                padding: 10px 18px;
+                padding: 8px 14px;
                 margin-right: 4px;
                 border-top-left-radius: 8px;
                 border-top-right-radius: 8px;
@@ -613,13 +613,13 @@ class CastelCredCamQt(QMainWindow):
         sidebar_host = QWidget()
         self.sidebar_scroll.setWidget(sidebar_host)
         sidebar_layout = QVBoxLayout(sidebar_host)
-        sidebar_layout.setContentsMargins(18, 18, 18, 18)
-        sidebar_layout.setSpacing(14)
+        sidebar_layout.setContentsMargins(16, 16, 16, 16)
+        sidebar_layout.setSpacing(12)
 
         title_card = self._make_card()
         title_layout = QVBoxLayout(title_card)
-        title_layout.setContentsMargins(18, 18, 18, 18)
-        title_layout.setSpacing(4)
+        title_layout.setContentsMargins(16, 16, 16, 16)
+        title_layout.setSpacing(2)
         title = QLabel(APP_TITLE)
         title.setObjectName("AppTitle")
         subtitle = QLabel("Captura por curso, roster y respaldo espejo")
@@ -631,8 +631,8 @@ class CastelCredCamQt(QMainWindow):
 
         self.session_card = self._make_card()
         session_layout = QVBoxLayout(self.session_card)
-        session_layout.setContentsMargins(16, 16, 16, 16)
-        session_layout.setSpacing(10)
+        session_layout.setContentsMargins(14, 14, 14, 14)
+        session_layout.setSpacing(8)
         session_layout.addWidget(self._card_title("Sesion"))
         self.test_radio = QRadioButton("Modo prueba")
         self.course_radio = QRadioButton("Modo curso")
@@ -673,8 +673,8 @@ class CastelCredCamQt(QMainWindow):
 
         self.roster_card = self._make_card()
         roster_layout = QVBoxLayout(self.roster_card)
-        roster_layout.setContentsMargins(16, 16, 16, 16)
-        roster_layout.setSpacing(10)
+        roster_layout.setContentsMargins(14, 14, 14, 14)
+        roster_layout.setSpacing(8)
         roster_layout.addWidget(self._card_title("Lista de alumnos"))
         self.roster_status_label = QLabel(self.roster_status_text)
         self.roster_status_label.setObjectName("Muted")
@@ -699,8 +699,8 @@ class CastelCredCamQt(QMainWindow):
 
         self.camera_card = self._make_card()
         camera_layout = QVBoxLayout(self.camera_card)
-        camera_layout.setContentsMargins(16, 16, 16, 16)
-        camera_layout.setSpacing(10)
+        camera_layout.setContentsMargins(14, 14, 14, 14)
+        camera_layout.setSpacing(8)
         camera_layout.addWidget(self._card_title("Fuentes de video"))
         camera_layout.addWidget(self._muted_label("DroidCam, OBS Virtual Camera o webcam integrada"))
         self.source_status_label = self._muted_label("Refresca la lista si abres OBS o DroidCam despues de iniciar.")
@@ -709,7 +709,7 @@ class CastelCredCamQt(QMainWindow):
         self.source_list = QListWidget()
         self.source_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.source_list.currentRowChanged.connect(self._on_source_selected)
-        self.source_list.setMinimumHeight(170)
+        self.source_list.setMinimumHeight(140)
         camera_layout.addWidget(self.source_list)
 
         self.camera_combo = QComboBox()
@@ -795,8 +795,8 @@ class CastelCredCamQt(QMainWindow):
 
         self.capture_card = self._make_card()
         capture_layout = QVBoxLayout(self.capture_card)
-        capture_layout.setContentsMargins(16, 16, 16, 16)
-        capture_layout.setSpacing(10)
+        capture_layout.setContentsMargins(14, 14, 14, 14)
+        capture_layout.setSpacing(8)
         self.capture_card_title = self._card_title("Captura")
         capture_layout.addWidget(self.capture_card_title)
         self.manual_student_label = self._muted_label("Nombre actual")
@@ -828,12 +828,12 @@ class CastelCredCamQt(QMainWindow):
 
         self.recent_card = self._make_card()
         recent_layout = QVBoxLayout(self.recent_card)
-        recent_layout.setContentsMargins(16, 16, 16, 16)
-        recent_layout.setSpacing(10)
+        recent_layout.setContentsMargins(14, 14, 14, 14)
+        recent_layout.setSpacing(8)
         recent_layout.addWidget(self._card_title("Recientes"))
         self.recent_text = QPlainTextEdit()
         self.recent_text.setReadOnly(True)
-        self.recent_text.setMaximumHeight(160)
+        self.recent_text.setMaximumHeight(120)
         recent_layout.addWidget(self.recent_text)
         sidebar_layout.addWidget(self.recent_card)
         sidebar_layout.addStretch(1)
@@ -855,7 +855,7 @@ class CastelCredCamQt(QMainWindow):
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([420, 1180])
+        splitter.setSizes([360, 1240])
 
         self.status_label = QLabel("Listo para iniciar. Selecciona camara, carga lista y abre sesion.")
         self.status_label.setObjectName("Status")
@@ -873,7 +873,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_frame = QFrame()
         self.preview_frame.setObjectName("CapturePanel")
         self.preview_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.preview_frame.setMinimumHeight(520)
+        self.preview_frame.setMinimumHeight(560)
         preview_layout = QVBoxLayout(self.preview_frame)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
@@ -1187,6 +1187,8 @@ class CastelCredCamQt(QMainWindow):
 
     def _on_camera_message(self, message: str) -> None:
         self.logger.info("Camera: %s", message)
+        if message.startswith("Frame recibido"):
+            return
         self.status_label.setText(message)
 
     def _on_camera_error(self, message: str) -> None:
@@ -2023,9 +2025,7 @@ class CastelCredCamQt(QMainWindow):
             status = f"{len(self._active_students())} alumnos cargados"
         return [
             f"{course} | {mode_text}",
-            f"{student}",
-            f"RUT: {rut}",
-            status,
+            f"{student} | RUT: {rut} | {status}",
         ]
 
     def _draw_guides(self, frame: np.ndarray) -> None:
