@@ -1317,7 +1317,6 @@ class CastelCredCamQt(QMainWindow):
         if self.tabs.currentWidget() != self.course_tab and not force:
             return
 
-        self._reconcile_session_roster_progress()
         students = self._active_students()
         course = self._active_course_text()
         current_index = self._active_index()
@@ -1404,7 +1403,6 @@ class CastelCredCamQt(QMainWindow):
         self.info_text.setPlainText("\n".join(lines))
 
     def _sync_session_ui(self) -> None:
-        self._reconcile_session_roster_progress()
         roster_available = bool(self._active_students())
         roster_mode = self.mode == "course" and roster_available
         self.capture_card_title.setText("Captura por lista" if roster_mode else "Captura")
