@@ -1046,6 +1046,7 @@ class CastelCredCamGUI:
     def _sync_session_student_from_roster(self) -> None:
         if self.session is None or not self.session.has_roster:
             return
+        self._reconcile_roster_progress()
         student = self.session.current_roster_student()
         if student is None:
             self.student_var.set("")
@@ -1069,6 +1070,18 @@ class CastelCredCamGUI:
             if self.session.roster_index >= self.session.roster_total:
                 return
             self.session.advance_roster()
+
+    def _reconcile_roster_progress(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        completed = self._completed_student_keys()
+        next_pending = self.session.roster_total
+        for index, student in enumerate(self.session.roster_students):
+            if student.key not in completed:
+                next_pending = index
+                break
+        if self.session.roster_index != next_pending:
+            self.session.roster_index = next_pending
 
     def _refresh_student_card_mode(self) -> None:
         manual_mode = self.session is None or not self.session.has_roster
@@ -1096,6 +1109,7 @@ class CastelCredCamGUI:
             self.roster_status_var.set("Lista cargada.\nLa captura secuencial queda lista al iniciar la sesión.")
             self._refresh_course_view()
             return
+        self._reconcile_roster_progress()
         student = self.session.current_roster_student()
         if student is None:
             self.roster_status_var.set(f"{self.session.course_display}\nLista completa.\nRevisa las capturas finales.")
@@ -1150,6 +1164,7 @@ class CastelCredCamGUI:
 
         start = datetime.now()
         self.logger.debug("Refreshing course view. force=%s", force)
+        self._reconcile_roster_progress()
 
         self.course_tree.configure(state="normal")
         self.course_tree.delete("1.0", "end")
@@ -1903,11 +1918,12 @@ class CastelCredCamGUI:
             started_at=datetime.now(),
             roster_students=roster_students,
         )
+        self._reconcile_roster_progress()
         self.session_var.set(f"Sesion activa: {course_display} | Carpeta: {session_dir.name}")
         self.status_var.set(f"Sesion iniciada en {session_dir}")
         if roster_students:
             self.session.roster_index = self.roster_preview_index.get(course_display, 0)
-            self._advance_roster_past_completed()
+            self._reconcile_roster_progress()
         self._sync_session_student_from_roster()
         self._refresh_student_card_mode()
         self._update_roster_session_label()
@@ -2017,7 +2033,7 @@ class CastelCredCamGUI:
         self.session.records.append(record)
         if self.session.has_roster:
             self.session.advance_roster()
-            self._advance_roster_past_completed()
+            self._reconcile_roster_progress()
             self._sync_session_student_from_roster()
         else:
             self.student_var.set("")
@@ -2063,8 +2079,7 @@ class CastelCredCamGUI:
             self.logger.exception("Failed to refresh backup CSV after retake.")
             pass
         if self.session.has_roster:
-            self.session.retreat_roster()
-            self._sync_session_student_from_roster()
+            self._reconcile_roster_progress()
             restored_student = self.session.current_roster_student()
             restored_name = restored_student.display_name if restored_student is not None else record.student_name
         else:

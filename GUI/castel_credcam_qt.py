@@ -1301,10 +1301,23 @@ class CastelCredCamQt(QMainWindow):
             keys.add(_student_key(record.student_name, record.rut))
         return keys
 
+    def _reconcile_session_roster_progress(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        completed_keys = self._session_completed_keys()
+        next_pending_index = len(self.session.roster_students)
+        for index, student in enumerate(self.session.roster_students):
+            if student.key not in completed_keys:
+                next_pending_index = index
+                break
+        if self.session.roster_index != next_pending_index:
+            self.session.roster_index = next_pending_index
+
     def _refresh_course_view(self, force: bool = False) -> None:
         if self.tabs.currentWidget() != self.course_tab and not force:
             return
 
+        self._reconcile_session_roster_progress()
         students = self._active_students()
         course = self._active_course_text()
         current_index = self._active_index()
@@ -1391,6 +1404,7 @@ class CastelCredCamQt(QMainWindow):
         self.info_text.setPlainText("\n".join(lines))
 
     def _sync_session_ui(self) -> None:
+        self._reconcile_session_roster_progress()
         roster_available = bool(self._active_students())
         roster_mode = self.mode == "course" and roster_available
         self.capture_card_title.setText("Captura por lista" if roster_mode else "Captura")
@@ -1662,6 +1676,7 @@ class CastelCredCamQt(QMainWindow):
             roster_students=roster_students,
             roster_index=roster_index,
         )
+        self._reconcile_session_roster_progress()
 
         self.logger.info(
             "Session started. mode=%s course=%s session_dir=%s backup_dir=%s roster_students=%s",
@@ -2362,6 +2377,7 @@ class CastelCredCamQt(QMainWindow):
         self.session.records.append(record)
         if self.session.has_roster:
             self.session.advance()
+            self._reconcile_session_roster_progress()
             self.student_edit.setText(self.session.current_student().display_name if self.session.current_student() else "")
         else:
             self.student_edit.clear()
@@ -2432,7 +2448,7 @@ class CastelCredCamQt(QMainWindow):
             return
 
         if self.session.has_roster:
-            self.session.retreat()
+            self._reconcile_session_roster_progress()
 
         self.logger.info("Retake last. removed=%s records=%s", last_record.filename, len(self.session.records))
         self.status_label.setText(f"Foto eliminada: {last_record.filename}")
