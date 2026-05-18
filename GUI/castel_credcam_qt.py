@@ -14,7 +14,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from openpyxl import load_workbook
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QSignalBlocker, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -405,6 +405,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_index_by_course: dict[str, int] = {}
         self.autoframe_jobs: dict[Path, threading.Thread] = {}
         self.autoframe_jobs_lock = threading.Lock()
+        self.course_table_syncing = False
         self.countdown_remaining = 0
         self.countdown_timer = QTimer(self)
         self.countdown_timer.setInterval(1000)
@@ -916,7 +917,9 @@ class CastelCredCamQt(QMainWindow):
         self.course_table.setHorizontalHeaderLabels(["Estado", "Alumno", "RUT"])
         self.course_table.setAlternatingRowColors(True)
         self.course_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.course_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.course_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.course_table.cellClicked.connect(self._on_course_row_clicked)
         self.course_table.horizontalHeader().setStretchLastSection(False)
         self.course_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.course_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -1270,6 +1273,32 @@ class CastelCredCamQt(QMainWindow):
             return None
         return students[idx]
 
+    def _sync_course_table_selection(self, row_index: int) -> None:
+        if self.course_table is None:
+            return
+        students = self._active_students()
+        with QSignalBlocker(self.course_table):
+            self.course_table.clearSelection()
+            if row_index < 0 or row_index >= len(students):
+                return
+            self.course_table.selectRow(row_index)
+            item = self.course_table.item(row_index, 1)
+            if item is not None:
+                self.course_table.scrollToItem(item)
+
+    def _on_course_row_clicked(self, row: int, _column: int) -> None:
+        students = self._active_students()
+        if row < 0 or row >= len(students):
+            return
+        self._set_active_index(row)
+        current = students[row]
+        if self.session and self.session.has_roster:
+            self.student_edit.setText(current.display_name)
+        self.status_label.setText(f"Seleccionado: {current.display_name}")
+        self._sync_session_ui()
+        self._refresh_course_view(force=True)
+        self._render_preview()
+
     def _update_roster_summary(self) -> None:
         students = self._active_students()
         course = self._active_course_text()
@@ -1378,6 +1407,7 @@ class CastelCredCamQt(QMainWindow):
         finally:
             self.course_table.setUpdatesEnabled(True)
 
+        self._sync_course_table_selection(current_index)
         self._update_roster_summary()
         self._update_info_tab()
 
