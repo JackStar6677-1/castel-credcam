@@ -107,7 +107,7 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
 FACE_DETECT_MAX_WIDTH = 1600
-PREVIEW_MAX_WIDTH = 1280
+PREVIEW_MAX_WIDTH = 960
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -376,6 +376,9 @@ class CastelCredCamQt(QMainWindow):
         self.current_crop_box: Optional[tuple[int, int, int, int]] = None
         self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
         self.preview_stable_crop_box: Optional[tuple[int, int, int, int]] = None
+        self.preview_face_box: Optional[tuple[int, int, int, int]] = None
+        self.preview_eye_centers: list[tuple[int, int]] = []
+        self.preview_detection_tick = 0
         self.last_face_detect_frame = -9999
         self.crop_manual_dx = 0.0
         self.crop_manual_dy = 0.0
@@ -400,7 +403,7 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
-        self.preview_render_timer.setInterval(50)
+        self.preview_render_timer.setInterval(66)
         self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
@@ -1083,6 +1086,10 @@ class CastelCredCamQt(QMainWindow):
         self.backend_id = backend_id
         self.backend_name = backend_name
         self.camera_alias = alias
+        self.preview_face_box = None
+        self.preview_eye_centers = []
+        self.preview_stable_crop_box = None
+        self.preview_detection_tick = 0
         save_last_camera(APP_ROOT, index, backend_key_from_id(backend_id))
         self.logger.info("Camera selected index=%s backend=%s alias=%s", index, backend_name, alias)
         self.source_status_label.setText(
@@ -1102,6 +1109,10 @@ class CastelCredCamQt(QMainWindow):
             self.status_label.setText("La camara sigue cerrando. Intenta de nuevo en unos segundos.")
             return
         self._preview_frame_received = False
+        self.preview_face_box = None
+        self.preview_eye_centers = []
+        self.preview_stable_crop_box = None
+        self.preview_detection_tick = 0
         selected_resolution = self._current_selected_resolution()
         self.camera_resolution = selected_resolution
         save_camera_resolution(
@@ -2171,14 +2182,27 @@ class CastelCredCamQt(QMainWindow):
         transformed = _rotate_frame(transformed, self.rotation_combo.currentText())
 
         detect_face = self.face_check.isChecked() or self.crop_check.isChecked()
-        face_box = self._detect_primary_face(transformed, update_state=False) if detect_face else None
+        face_box: Optional[tuple[int, int, int, int]] = None
+        eye_centers: list[tuple[int, int]] = []
+        if detect_face:
+            self.preview_detection_tick += 1
+            refresh_detection = self.preview_face_box is None or self.preview_detection_tick % 3 == 0
+            if refresh_detection:
+                face_box = self._detect_primary_face(transformed, update_state=False)
+                if face_box is not None:
+                    gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY)
+                    eye_centers = self._detect_eyes_in_face(gray, face_box)
+                    self.preview_face_box = face_box
+                    self.preview_eye_centers = eye_centers
+                elif self.preview_face_box is not None:
+                    face_box = self.preview_face_box
+                    eye_centers = self.preview_eye_centers
+            else:
+                face_box = self.preview_face_box
+                eye_centers = self.preview_eye_centers
         crop_box: Optional[tuple[int, int, int, int]] = None
 
         if self.crop_check.isChecked():
-            eye_centers: list[tuple[int, int]] = []
-            if face_box is not None:
-                gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY)
-                eye_centers = self._detect_eyes_in_face(gray, face_box)
             crop_box = self._compute_portrait_crop_box(
                 transformed.shape[1],
                 transformed.shape[0],
@@ -2190,6 +2214,8 @@ class CastelCredCamQt(QMainWindow):
             transformed = self._crop_frame_with_box(transformed, crop_box, output_size=(900, 1200))
         else:
             self.preview_stable_crop_box = None
+            self.preview_face_box = None
+            self.preview_eye_centers = []
 
         if self.guide_check.isChecked():
             self._draw_context_guides(transformed, preview_frame.shape[1], preview_frame.shape[0], crop_box, face_box)
@@ -2288,7 +2314,7 @@ class CastelCredCamQt(QMainWindow):
                 self.preview_render_timer.stop()
             else:
                 return
-        delay_ms = 1 if immediate else 50
+        delay_ms = 1 if immediate else 66
         self.preview_render_timer.start(delay_ms)
 
     def _render_preview_safe(self) -> None:
