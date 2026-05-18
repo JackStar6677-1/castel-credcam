@@ -1654,17 +1654,23 @@ class CastelCredCamGUI:
             fx, fy, fw, fh = face_box
             face_cx = fx + fw / 2
             face_cy = fy + fh / 2
-            crop_h = max(int(fh * 2.70), int(height * 0.62))
+            # Dejamos más aire para que la captura no corte hombros o rostro.
+            crop_h = max(int(fh * 3.08), int(height * 0.70))
             crop_h = min(crop_h, max_crop_h)
             crop_w = int(crop_h * target_ratio)
-            x1 = int(face_cx - crop_w / 2)
+            if fx < width * 0.36:
+                x1 = int(face_cx - crop_w * 0.62)
+            elif fx > width * 0.64:
+                x1 = int(face_cx - crop_w * 0.38)
+            else:
+                x1 = int(face_cx - crop_w / 2)
             if eye_centers:
                 eye_y = sum(pt[1] for pt in eye_centers) / len(eye_centers)
-                y1 = int(eye_y - crop_h * 0.26)
+                y1 = int(eye_y - crop_h * 0.30)
             else:
-                y1 = int(face_cy - crop_h * 0.34)
+                y1 = int(face_cy - crop_h * 0.38)
         else:
-            crop_h = int(max_crop_h * 0.94)
+            crop_h = int(max_crop_h * 0.97)
             crop_h = max(CROP_MIN_HEIGHT, crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = (width - crop_w) // 2
