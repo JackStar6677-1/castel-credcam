@@ -768,6 +768,10 @@ def autoframe_photo_file(image_path: Path, backup_path: Optional[Path] = None) -
         if image is None:
             return False, f"No se pudo leer {image_path}"
 
+        if backup_path is not None and not backup_path.exists():
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image_path, backup_path)
+
         face_box = _autoframe_detect_face(image)
         crop_box = _autoframe_build_crop_box(image.shape[1], image.shape[0], face_box)
         framed = _autoframe_crop_frame(image, crop_box)
@@ -776,13 +780,6 @@ def autoframe_photo_file(image_path: Path, backup_path: Optional[Path] = None) -
         if not cv2.imwrite(str(tmp_main), framed):
             return False, f"No se pudo escribir temporal {tmp_main.name}"
         tmp_main.replace(image_path)
-
-        if backup_path is not None:
-            backup_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_backup = backup_path.with_name(f"{backup_path.stem}.__autoframe_tmp{backup_path.suffix}")
-            if not cv2.imwrite(str(tmp_backup), framed):
-                return False, f"No se pudo escribir respaldo temporal {tmp_backup.name}"
-            tmp_backup.replace(backup_path)
 
         return True, f"Reencuadre aplicado a {image_path.name}"
     except Exception as exc:
