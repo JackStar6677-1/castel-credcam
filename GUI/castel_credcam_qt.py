@@ -849,15 +849,16 @@ class CastelCredCamQt(QMainWindow):
 
         self.preview_frame = QFrame()
         self.preview_frame.setObjectName("CapturePanel")
+        self.preview_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_frame.setMinimumHeight(520)
         preview_layout = QVBoxLayout(self.preview_frame)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
         self.preview_label = QLabel("Sin señal de camara")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.preview_label.setStyleSheet("background: #0D0914; color: #D6C8E8; border-radius: 10px;")
-        self.preview_label.setMinimumHeight(480)
+        self.preview_label.setMinimumSize(0, 0)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_frame, 1)
 
@@ -1170,9 +1171,7 @@ class CastelCredCamQt(QMainWindow):
         self._show_preview_message(message)
 
     def _show_preview_message(self, message: str) -> None:
-        pixmap = QPixmap(1280, 720)
-        pixmap.fill(Qt.GlobalColor.black)
-        self.preview_label.setPixmap(pixmap)
+        self.preview_label.clear()
         self.preview_label.setText(message)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
