@@ -109,7 +109,7 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
 FACE_DETECT_MAX_WIDTH = 960
-PREVIEW_MAX_WIDTH = 360
+PREVIEW_MAX_WIDTH = 640
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -336,7 +336,7 @@ class CameraThread(QThread):
                     self._latest_frame = frame
                 if frame_count == 1 or frame_count % 60 == 0:
                     self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
-                self.msleep(120)
+                self.msleep(33)
         except Exception as exc:
             self.camera_error.emit(str(exc))
         finally:
@@ -420,7 +420,7 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
-        self.preview_render_timer.setInterval(180)
+        self.preview_render_timer.setInterval(33)
         self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
@@ -2372,7 +2372,7 @@ class CastelCredCamQt(QMainWindow):
                 self.preview_render_timer.stop()
             else:
                 return
-        delay_ms = 1 if immediate else 66
+        delay_ms = 1 if immediate else 33
         self.preview_render_timer.start(delay_ms)
 
     def _render_preview_safe(self) -> None:
