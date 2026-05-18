@@ -107,7 +107,7 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
 FACE_DETECT_MAX_WIDTH = 1280
-PREVIEW_MAX_WIDTH = 720
+PREVIEW_MAX_WIDTH = 480
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -330,7 +330,7 @@ class CameraThread(QThread):
                 frame_count += 1
                 if frame_count == 1 or frame_count % 60 == 0:
                     self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
-                if frame_count % 3 == 0:
+                if frame_count % 2 == 0:
                     self.frame_ready.emit(frame)
                 self.msleep(60)
         except Exception as exc:
@@ -2185,46 +2185,14 @@ class CastelCredCamQt(QMainWindow):
             transformed = cv2.flip(transformed, 1)
         transformed = _rotate_frame(transformed, self.rotation_combo.currentText())
 
-        detect_face = self.face_check.isChecked() or self.crop_check.isChecked()
-        face_box: Optional[tuple[int, int, int, int]] = None
-        eye_centers: list[tuple[int, int]] = []
-        if detect_face:
-            self.preview_detection_tick += 1
-            refresh_detection = self.preview_face_box is None or self.preview_detection_tick % 6 == 0
-            if refresh_detection:
-                face_box = self._detect_primary_face(transformed, update_state=False)
-                if face_box is not None:
-                    gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY)
-                    eye_centers = self._detect_eyes_in_face(gray, face_box)
-                    self.preview_face_box = face_box
-                    self.preview_eye_centers = eye_centers
-                elif self.preview_face_box is not None:
-                    face_box = self.preview_face_box
-                    eye_centers = self.preview_eye_centers
-            else:
-                face_box = self.preview_face_box
-                eye_centers = self.preview_eye_centers
-        crop_box: Optional[tuple[int, int, int, int]] = None
-
-        if self.crop_check.isChecked():
-            crop_box = self._compute_portrait_crop_box(
-                transformed.shape[1],
-                transformed.shape[0],
-                face_box,
-                eye_centers,
-            )
-            crop_box = self._smooth_preview_crop_box(crop_box)
-            crop_box = self._apply_manual_crop_tuning(crop_box, transformed.shape[1], transformed.shape[0])
-            transformed = self._crop_frame_with_box(transformed, crop_box, output_size=(900, 1200))
-        else:
-            self.preview_stable_crop_box = None
-            self.preview_face_box = None
-            self.preview_eye_centers = []
+        # Preview stays intentionally lightweight; heavy detection runs on capture.
 
         if self.guide_check.isChecked():
-            self._draw_context_guides(transformed, preview_frame.shape[1], preview_frame.shape[0], crop_box, face_box)
-        if self.face_check.isChecked() and face_box is not None:
-            self._draw_face_anchor(transformed, crop_box, face_box)
+            self._draw_preview_banner(
+                transformed,
+                [f"Vista ligera {transformed.shape[1]}x{transformed.shape[0]}", "Procesamiento pesado solo al capturar"],
+                48,
+            )
 
         return transformed
 
