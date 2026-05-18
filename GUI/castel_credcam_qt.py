@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -556,24 +555,6 @@ class CastelCredCamQt(QMainWindow):
             QRadioButton, QCheckBox {{
                 spacing: 8px;
             }}
-            QTabWidget::pane {{
-                border: 1px solid {CARD_EDGE};
-                background: {INFO_BG};
-                border-radius: 12px;
-            }}
-            QTabBar::tab {{
-                background: #1F1E25;
-                color: {TEXT_MUTED};
-                padding: 8px 14px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-            }}
-            QTabBar::tab:selected {{
-                background: {INFO_BG};
-                color: {TEXT_PRIMARY};
-                font-weight: 700;
-            }}
             QTableWidget {{
                 background: #19181F;
                 alternate-background-color: #202028;
@@ -838,24 +819,35 @@ class CastelCredCamQt(QMainWindow):
         sidebar_layout.addWidget(self.recent_card)
         sidebar_layout.addStretch(1)
 
-        self.tabs = QTabWidget()
-        self.capture_tab = QWidget()
-        self.info_tab = QWidget()
-        self.course_tab = QWidget()
-        self.tabs.addTab(self.capture_tab, "Captura")
-        self.tabs.addTab(self.info_tab, "Info")
-        self.tabs.addTab(self.course_tab, "Curso")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.info_card = self._make_card()
+        info_layout = QVBoxLayout(self.info_card)
+        info_layout.setContentsMargins(14, 14, 14, 14)
+        info_layout.setSpacing(8)
+        info_layout.addWidget(self._card_title("Info"))
+        self.info_text = QPlainTextEdit()
+        self.info_text.setReadOnly(True)
+        self.info_text.setMaximumHeight(128)
+        info_layout.addWidget(self.info_text)
+        sidebar_layout.addWidget(self.info_card)
 
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.main_splitter.setChildrenCollapsible(False)
+
+        self.capture_tab = QWidget()
+        self.course_tab = QWidget()
         self._build_capture_tab()
-        self._build_info_tab()
         self._build_course_tab()
+        self.main_splitter.addWidget(self.capture_tab)
+        self.main_splitter.addWidget(self.course_tab)
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 2)
+        self.main_splitter.setSizes([760, 380])
 
         splitter.addWidget(self.sidebar_scroll)
-        splitter.addWidget(self.tabs)
+        splitter.addWidget(self.main_splitter)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 1240])
+        splitter.setSizes([340, 1260])
 
         self.status_label = QLabel("Listo para iniciar. Selecciona camara, carga lista y abre sesion.")
         self.status_label.setObjectName("Status")
@@ -902,17 +894,6 @@ class CastelCredCamQt(QMainWindow):
         self.open_folder_tab_button.clicked.connect(self.open_photos_root)
         bottom_row.addWidget(self.open_folder_tab_button)
         layout.addLayout(bottom_row)
-
-    def _build_info_tab(self) -> None:
-        layout = QVBoxLayout(self.info_tab)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-        title = QLabel("Info de ejecucion")
-        title.setStyleSheet("font-size: 16pt; font-weight: 700; color: #F0C85C;")
-        layout.addWidget(title)
-        self.info_text = QPlainTextEdit()
-        self.info_text.setReadOnly(True)
-        layout.addWidget(self.info_text, 1)
 
     def _build_course_tab(self) -> None:
         layout = QVBoxLayout(self.course_tab)
@@ -1261,14 +1242,6 @@ class CastelCredCamQt(QMainWindow):
         if self.camera_thread is not None:
             self._start_camera_thread()
 
-    def _on_tab_changed(self, index: int) -> None:
-        tab = self.tabs.tabText(index)
-        self.logger.info("Notebook tab changed: %s", tab)
-        if tab == "Curso":
-            self._refresh_course_view(force=True)
-        elif tab == "Captura":
-            self._schedule_preview_render(immediate=True)
-
     def _active_course_text(self) -> str:
         if self.session is not None:
             return self.session.course_display
@@ -1388,9 +1361,6 @@ class CastelCredCamQt(QMainWindow):
             self.session.roster_index = next_pending_index
 
     def _refresh_course_view(self, force: bool = False) -> None:
-        if self.tabs.currentWidget() != self.course_tab and not force:
-            return
-
         students = self._active_students()
         course = self._active_course_text()
         current_index = self._active_index()
@@ -2388,7 +2358,7 @@ class CastelCredCamQt(QMainWindow):
             self.logger.exception("Preview render failed: %s", exc)
             self._show_preview_message(f"Error al renderizar vista: {exc}")
         finally:
-            if self.tabs.currentWidget() == self.capture_tab or self.countdown_remaining > 0:
+            if self.camera_thread is not None or self.countdown_remaining > 0:
                 self._schedule_preview_render()
 
     def _on_first_frame_timeout(self) -> None:
@@ -2639,8 +2609,7 @@ class CastelCredCamQt(QMainWindow):
         self._render_preview()
 
     def _on_resize(self) -> None:
-        if self.tabs.currentWidget() == self.capture_tab:
-            self._schedule_preview_render(immediate=True)
+        self._schedule_preview_render(immediate=True)
 
     def prev_camera(self) -> None:
         if not self.camera_choices:
