@@ -2253,11 +2253,7 @@ class CastelCredCamQt(QMainWindow):
 
         if self.guide_check.isChecked() or self.face_check.isChecked():
             info_lines = self._preview_status_lines()
-            banner_height = 78
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (overlay.shape[1], banner_height), (17, 8, 26), -1)
-            cv2.addWeighted(overlay, 0.42, frame, 0.58, 0, frame)
-            self._draw_preview_banner(frame, info_lines, banner_height)
+            self._draw_preview_banner(frame, info_lines, 0)
 
         pixmap = _cv_to_qpixmap(frame)
         scaled = pixmap.scaled(
@@ -2285,13 +2281,6 @@ class CastelCredCamQt(QMainWindow):
         transformed = _rotate_frame(transformed, self.rotation_combo.currentText())
 
         # Preview stays intentionally lightweight; heavy detection runs on capture.
-
-        if self.guide_check.isChecked():
-            self._draw_preview_banner(
-                transformed,
-                [f"Vista ligera {transformed.shape[1]}x{transformed.shape[0]}", "Procesamiento pesado solo al capturar"],
-                48,
-            )
 
         return transformed
 
@@ -2339,32 +2328,49 @@ class CastelCredCamQt(QMainWindow):
         return self.preview_stable_crop_box
 
     def _draw_preview_banner(self, frame: np.ndarray, lines: list[str], banner_height: int) -> None:
-        y = 22
+        if not lines:
+            return
+
+        height, width = frame.shape[:2]
+        lines = lines[:2]
+        text_scales = [0.45, 0.39]
+        text_thickness = [1, 1]
+        padding_x = 12
+        padding_y = 8
+        line_gap = 6
+        text_sizes = [
+            cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, text_scales[idx], text_thickness[idx])[0]
+            for idx, line in enumerate(lines)
+        ]
+        chip_w = max(size[0] for size in text_sizes) + padding_x * 2
+        chip_h = sum(size[1] for size in text_sizes) + padding_y * 2 + line_gap * max(0, len(lines) - 1)
+        chip_w = min(chip_w, max(220, width - 24))
+        chip_h = max(32, chip_h)
+        x1 = 12
+        y1 = max(12, height - chip_h - 12)
+        x2 = min(width - 12, x1 + chip_w)
+        y2 = min(height - 12, y1 + chip_h)
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (14, 12, 18), -1)
+        cv2.addWeighted(overlay, 0.52, frame, 0.48, 0, frame)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (92, 77, 126), 1)
+
+        text_x = x1 + padding_x
+        text_y = y1 + padding_y + text_sizes[0][1]
         for idx, line in enumerate(lines):
-            font_scale = 0.60 if idx == 0 else 0.50
-            thickness = 2 if idx == 0 else 1
             cv2.putText(
                 frame,
                 line,
-                (16, y),
+                (text_x, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale,
-                (245, 241, 255),
-                thickness,
+                text_scales[idx],
+                (244, 240, 247),
+                text_thickness[idx],
                 cv2.LINE_AA,
             )
-            y += 18 if idx == 0 else 17
-        if self.countdown_remaining > 0:
-            cv2.putText(
-                frame,
-                f"Captura en {self.countdown_remaining}s",
-                (16, banner_height - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.52,
-                (240, 200, 92),
-                1,
-                cv2.LINE_AA,
-            )
+            if idx + 1 < len(lines):
+                text_y += text_sizes[idx + 1][1] + line_gap
 
     def _schedule_preview_render(self, immediate: bool = False) -> None:
         if self.preview_render_timer.isActive():
