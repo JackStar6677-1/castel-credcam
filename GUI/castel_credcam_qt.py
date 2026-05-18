@@ -81,22 +81,22 @@ from castel_credcam import (  # noqa: E402
 
 
 APP_TITLE = "CastelCredCam Studio"
-WINDOW_BG = "#12061B"
-PANEL_BG = "#20102E"
-CARD_BG = "#2A1540"
-CARD_EDGE = "#4B2A71"
-INFO_BG = "#170D25"
-TEXT_PRIMARY = "#F7F1FF"
-TEXT_MUTED = "#DCCCEF"
-ACCENT_PURPLE = "#915CFF"
-ACCENT_GOLD = "#F0C85C"
-ACCENT_GOLD_DARK = "#4A2E00"
-SUCCESS = "#6DDCB5"
-PENDING = "#D4B9F4"
-DANGER = "#FF8092"
-DONE_BG = "#183122"
-CURRENT_BG = "#584010"
-PENDING_BG = "#2B1640"
+WINDOW_BG = "#141317"
+PANEL_BG = "#1C1B21"
+CARD_BG = "#23222A"
+CARD_EDGE = "#383545"
+INFO_BG = "#17161B"
+TEXT_PRIMARY = "#F2EEF7"
+TEXT_MUTED = "#C7C1CF"
+ACCENT_PURPLE = "#6A4A98"
+ACCENT_GOLD = "#C4B06A"
+ACCENT_GOLD_DARK = "#2D2816"
+SUCCESS = "#6FBFA5"
+PENDING = "#B8AEC9"
+DANGER = "#C87182"
+DONE_BG = "#1D2722"
+CURRENT_BG = "#352C43"
+PENDING_BG = "#25222E"
 COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
     (1280, 720),
     (1920, 1080),
@@ -108,8 +108,8 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
     (2560, 1440),
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
-FACE_DETECT_MAX_WIDTH = 1280
-PREVIEW_MAX_WIDTH = 480
+FACE_DETECT_MAX_WIDTH = 960
+PREVIEW_MAX_WIDTH = 360
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -336,7 +336,7 @@ class CameraThread(QThread):
                     self._latest_frame = frame
                 if frame_count == 1 or frame_count % 60 == 0:
                     self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
-                self.msleep(90)
+                self.msleep(120)
         except Exception as exc:
             self.camera_error.emit(str(exc))
         finally:
@@ -420,7 +420,7 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
-        self.preview_render_timer.setInterval(140)
+        self.preview_render_timer.setInterval(180)
         self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
@@ -464,8 +464,15 @@ class CastelCredCamQt(QMainWindow):
             QFrame#CapturePanel {{
                 background: {INFO_BG};
             }}
+            QScrollArea {{
+                background: {PANEL_BG};
+                border: none;
+            }}
+            QSplitter::handle {{
+                background: {CARD_EDGE};
+            }}
             QListWidget {{
-                background: #170D25;
+                background: #19181E;
                 border: 1px solid {CARD_EDGE};
                 border-radius: 10px;
                 padding: 4px;
@@ -497,18 +504,21 @@ class CastelCredCamQt(QMainWindow):
                 color: {TEXT_MUTED};
             }}
             QLabel#Status {{
-                background: #1D1028;
+                background: #1C1A22;
                 color: {SUCCESS};
                 border-radius: 10px;
                 padding: 8px 10px;
                 font-weight: 700;
             }}
             QLineEdit, QComboBox, QPlainTextEdit {{
-                background: #F9F6FF;
-                color: #1B1025;
-                border: 1px solid #BFA9DD;
+                background: #222028;
+                color: {TEXT_PRIMARY};
+                border: 1px solid #49445A;
                 border-radius: 8px;
                 padding: 7px 8px;
+            }}
+            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{
+                border: 1px solid {ACCENT_PURPLE};
             }}
             QComboBox::drop-down {{
                 border: none;
@@ -552,7 +562,7 @@ class CastelCredCamQt(QMainWindow):
                 border-radius: 12px;
             }}
             QTabBar::tab {{
-                background: #241133;
+                background: #1F1E25;
                 color: {TEXT_MUTED};
                 padding: 10px 18px;
                 margin-right: 4px;
@@ -565,17 +575,17 @@ class CastelCredCamQt(QMainWindow):
                 font-weight: 700;
             }}
             QTableWidget {{
-                background: #1A1027;
-                alternate-background-color: #221332;
-                gridline-color: #4D3869;
+                background: #19181F;
+                alternate-background-color: #202028;
+                gridline-color: #423D54;
                 color: {TEXT_PRIMARY};
-                selection-background-color: #6B49C3;
+                selection-background-color: {ACCENT_PURPLE};
                 selection-color: white;
                 border: none;
                 border-radius: 8px;
             }}
             QHeaderView::section {{
-                background: #2A173D;
+                background: #24222C;
                 color: {ACCENT_GOLD};
                 padding: 8px;
                 border: none;
@@ -857,7 +867,7 @@ class CastelCredCamQt(QMainWindow):
         layout.setSpacing(14)
 
         self.session_label = QLabel("Sesion no iniciada")
-        self.session_label.setStyleSheet("font-size: 13pt; font-weight: 700;")
+        self.session_label.setStyleSheet("font-size: 13pt; font-weight: 700; color: #E8E4EF;")
         layout.addWidget(self.session_label)
 
         self.preview_frame = QFrame()
@@ -870,7 +880,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_label = QLabel("Sin señal de camara")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.preview_label.setStyleSheet("background: #0D0914; color: #D6C8E8; border-radius: 10px;")
+        self.preview_label.setStyleSheet("background: #111016; color: #CFC9D8; border-radius: 10px;")
         self.preview_label.setMinimumSize(0, 0)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_frame, 1)
@@ -1301,6 +1311,20 @@ class CastelCredCamQt(QMainWindow):
             if item is not None:
                 self.course_table.scrollToItem(item)
 
+    def _advance_roster_past_completed(self) -> None:
+        if self.session is None or not self.session.has_roster:
+            return
+        completed_keys = self._session_completed_keys()
+        while True:
+            current = self.session.current_student()
+            if current is None:
+                return
+            if current.key not in completed_keys:
+                return
+            if self.session.roster_index >= self.session.roster_total:
+                return
+            self.session.advance()
+
     def _on_course_row_clicked(self, row: int, _column: int) -> None:
         students = self._active_students()
         if row < 0 or row >= len(students):
@@ -1468,7 +1492,7 @@ class CastelCredCamQt(QMainWindow):
     def _update_session_labels(self) -> None:
         if self.session is None:
             self.session_label.setText("Sesion no iniciada")
-            self.session_label.setStyleSheet("font-size: 13pt; font-weight: 700; color: #F7F1FF;")
+            self.session_label.setStyleSheet("font-size: 13pt; font-weight: 700; color: #E8E4EF;")
             self.test_radio.setEnabled(True)
             self.course_radio.setEnabled(True)
             self.course_combo.setEnabled(True)
@@ -1723,7 +1747,7 @@ class CastelCredCamQt(QMainWindow):
             roster_students=roster_students,
             roster_index=roster_index,
         )
-        self._reconcile_session_roster_progress()
+        self._advance_roster_past_completed()
 
         self.logger.info(
             "Session started. mode=%s course=%s session_dir=%s backup_dir=%s roster_students=%s",
@@ -2423,8 +2447,12 @@ class CastelCredCamQt(QMainWindow):
         self.session.records.append(record)
         if self.session.has_roster:
             self.session.advance()
-            self._reconcile_session_roster_progress()
-            self.student_edit.setText(self.session.current_student().display_name if self.session.current_student() else "")
+            self._advance_roster_past_completed()
+            current = self.session.current_student()
+            if current is not None:
+                self.student_edit.setText(current.display_name)
+            else:
+                self.student_edit.clear()
         else:
             self.student_edit.clear()
 
@@ -2500,7 +2528,7 @@ class CastelCredCamQt(QMainWindow):
             return
 
         if self.session.has_roster:
-            self._reconcile_session_roster_progress()
+            self.session.retreat()
 
         self.logger.info("Retake last. removed=%s records=%s", last_record.filename, len(self.session.records))
         self.status_label.setText(f"Foto eliminada: {last_record.filename}")

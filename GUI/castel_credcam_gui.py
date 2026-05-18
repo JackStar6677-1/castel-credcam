@@ -82,18 +82,18 @@ class RosterStudent:
 
 
 APP_TITLE = "CastelCredCam Studio"
-WINDOW_BG = "#14061E"
-PANEL_BG = "#241033"
-CARD_BG = "#31164A"
-INFO_BG = "#1A0D28"
-ACCENT_PURPLE = "#8B4DFF"
-ACCENT_GOLD = "#F4C95D"
-TEXT_PRIMARY = "#F7F1FF"
-TEXT_MUTED = "#D8C8F2"
-SUCCESS = "#6EE7B7"
-DANGER = "#FF7A90"
+WINDOW_BG = "#141317"
+PANEL_BG = "#1C1B21"
+CARD_BG = "#23222A"
+INFO_BG = "#17161B"
+ACCENT_PURPLE = "#6A4A98"
+ACCENT_GOLD = "#C4B06A"
+TEXT_PRIMARY = "#F2EEF7"
+TEXT_MUTED = "#C7C1CF"
+SUCCESS = "#6FBFA5"
+DANGER = "#C87182"
 CROP_MIN_HEIGHT = 220
-FACE_DETECT_MAX_WIDTH = 1600
+FACE_DETECT_MAX_WIDTH = 960
 FACE_HOLD_FRAMES = 6
 
 
@@ -271,16 +271,16 @@ class CastelCredCamGUI:
         self.style.configure("Muted.TLabel", background=CARD_BG, foreground=TEXT_MUTED, font=("Segoe UI", 9))
         self.style.configure("Accent.TButton", background=ACCENT_PURPLE, foreground=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"), padding=8)
         self.style.map("Accent.TButton", background=[("active", "#A56CFF")])
-        self.style.configure("Gold.TButton", background=ACCENT_GOLD, foreground="#291600", font=("Segoe UI", 10, "bold"), padding=8)
-        self.style.map("Gold.TButton", background=[("active", "#FFD97F")])
+        self.style.configure("Gold.TButton", background=ACCENT_GOLD, foreground="#261F13", font=("Segoe UI", 10, "bold"), padding=8)
+        self.style.map("Gold.TButton", background=[("active", "#D8C57C")])
         self.style.configure("Danger.TButton", background=DANGER, foreground=TEXT_PRIMARY, font=("Segoe UI", 10, "bold"), padding=8)
-        self.style.configure("TEntry", fieldbackground="#FFF9FE", foreground="#180E24", padding=6)
-        self.style.configure("TCombobox", fieldbackground="#FFF9FE", foreground="#180E24", padding=4)
+        self.style.configure("TEntry", fieldbackground="#23222A", foreground=TEXT_PRIMARY, padding=6)
+        self.style.configure("TCombobox", fieldbackground="#23222A", foreground=TEXT_PRIMARY, padding=4)
         self.style.configure("TRadiobutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 10))
         self.style.map("TRadiobutton", background=[("active", CARD_BG)])
         self.style.configure("TCheckbutton", background=CARD_BG, foreground=TEXT_PRIMARY, font=("Segoe UI", 10))
-        self.style.configure("Treeview", background="#1D102A", fieldbackground="#1D102A", foreground=TEXT_PRIMARY, rowheight=28)
-        self.style.configure("Treeview.Heading", background="#2F1847", foreground=ACCENT_GOLD, font=("Segoe UI", 10, "bold"))
+        self.style.configure("Treeview", background="#19181F", fieldbackground="#19181F", foreground=TEXT_PRIMARY, rowheight=28)
+        self.style.configure("Treeview.Heading", background="#24222C", foreground=ACCENT_GOLD, font=("Segoe UI", 10, "bold"))
 
     def _build_layout(self) -> None:
         self.root.grid_columnconfigure(1, weight=1)
@@ -1392,7 +1392,7 @@ class CastelCredCamGUI:
         self.preview_job = None
         if self.capture is None:
             self._show_placeholder("Selecciona una camara para empezar.")
-            self._schedule_preview(250)
+            self._schedule_preview(350)
             return
 
         if self.notebook is not None:
@@ -1401,7 +1401,7 @@ class CastelCredCamGUI:
             except Exception:
                 current_tab = ""
             if current_tab != "Captura":
-                self._schedule_preview(500)
+                self._schedule_preview(700)
                 return
 
         ok, frame = self.capture.read()
@@ -1919,12 +1919,11 @@ class CastelCredCamGUI:
             started_at=datetime.now(),
             roster_students=roster_students,
         )
-        self._reconcile_roster_progress()
         self.session_var.set(f"Sesion activa: {course_display} | Carpeta: {session_dir.name}")
         self.status_var.set(f"Sesion iniciada en {session_dir}")
         if roster_students:
             self.session.roster_index = self.roster_preview_index.get(course_display, 0)
-            self._reconcile_roster_progress()
+            self._advance_roster_past_completed()
         self._sync_session_student_from_roster()
         self._refresh_student_card_mode()
         self._update_roster_session_label()
@@ -2035,7 +2034,7 @@ class CastelCredCamGUI:
         self.session.records.append(record)
         if self.session.has_roster:
             self.session.advance_roster()
-            self._reconcile_roster_progress()
+            self._advance_roster_past_completed()
             self._sync_session_student_from_roster()
         else:
             self.student_var.set("")
@@ -2086,7 +2085,7 @@ class CastelCredCamGUI:
             self.logger.exception("Failed to refresh backup CSV after retake.")
             pass
         if self.session.has_roster:
-            self._reconcile_roster_progress()
+            self.session.retreat_roster()
             restored_student = self.session.current_roster_student()
             restored_name = restored_student.display_name if restored_student is not None else record.student_name
         else:
