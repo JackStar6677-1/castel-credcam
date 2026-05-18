@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import subprocess
 import sys
+import threading
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -401,6 +403,8 @@ class CastelCredCamQt(QMainWindow):
         self.roster_map: dict[str, list[RosterStudent]] = {}
         self.roster_order: list[str] = []
         self.preview_index_by_course: dict[str, int] = {}
+        self.autoframe_jobs: dict[Path, threading.Thread] = {}
+        self.autoframe_jobs_lock = threading.Lock()
         self.countdown_remaining = 0
         self.countdown_timer = QTimer(self)
         self.countdown_timer.setInterval(1000)
@@ -2367,6 +2371,7 @@ class CastelCredCamQt(QMainWindow):
             append_csv_record(self.session.csv_path, record)
             ensure_photo_backup(image_path, backup_path)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
+            self._launch_photo_autoframe(image_path, backup_path)
         except Exception as exc:
             self.logger.exception("Failed to save capture: %s", exc)
             QMessageBox.critical(self, "Error al guardar", f"No se pudo guardar la captura:\n{exc}")
@@ -2433,6 +2438,10 @@ class CastelCredCamQt(QMainWindow):
         last_record = self.session.records.pop()
         image_path = self.session.session_dir / last_record.filename
         backup_path = self.session.backup_dir / last_record.filename
+        if not self._wait_for_autoframe_job(image_path, timeout=10.0):
+            self.status_label.setText("Todavia estoy reencuadrando la foto anterior. Espera un momento.")
+            self.session.records.append(last_record)
+            return
         try:
             if image_path.exists():
                 image_path.unlink()
@@ -2462,6 +2471,50 @@ class CastelCredCamQt(QMainWindow):
     def _append_recent_record(self, record: PhotoRecord) -> None:
         text = f"{record.id:03d} | {record.student_name} | {record.rut or '-'} | {record.filename}"
         self._append_recent_text(text)
+
+    def _autoframe_script_path(self) -> Path:
+        return APP_ROOT / "photo_autoframe.py"
+
+    def _launch_photo_autoframe(self, image_path: Path, backup_path: Path) -> None:
+        script_path = self._autoframe_script_path()
+        if not script_path.exists():
+            self.logger.warning("Auto frame helper missing: %s", script_path)
+            return
+
+        def worker() -> None:
+            command = [sys.executable, str(script_path), str(image_path), "--backup", str(backup_path)]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                stdout = (result.stdout or "").strip()
+                stderr = (result.stderr or "").strip()
+                if stdout:
+                    self.logger.info("AutoFrame %s: %s", image_path.name, stdout)
+                if stderr:
+                    self.logger.warning("AutoFrame stderr %s: %s", image_path.name, stderr)
+                if result.returncode != 0:
+                    self.logger.warning("AutoFrame returned %s for %s", result.returncode, image_path.name)
+            except Exception as exc:
+                self.logger.exception("AutoFrame worker failed for %s: %s", image_path, exc)
+            finally:
+                with self.autoframe_jobs_lock:
+                    self.autoframe_jobs.pop(image_path, None)
+
+        thread = threading.Thread(target=worker, name=f"autoframe-{image_path.stem}", daemon=True)
+        with self.autoframe_jobs_lock:
+            self.autoframe_jobs[image_path] = thread
+        thread.start()
+
+    def _wait_for_autoframe_job(self, image_path: Path, timeout: float = 10.0) -> bool:
+        with self.autoframe_jobs_lock:
+            thread = self.autoframe_jobs.get(image_path)
+        if thread is None:
+            return True
+        thread.join(timeout)
+        if thread.is_alive():
+            return False
+        with self.autoframe_jobs_lock:
+            self.autoframe_jobs.pop(image_path, None)
+        return True
 
     def next_roster_student(self) -> None:
         students = self._active_students()

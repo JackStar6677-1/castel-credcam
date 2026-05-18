@@ -45,6 +45,9 @@ TEXT_FONT = cv2.FONT_HERSHEY_SIMPLEX
 TEXT_SCALE = 0.58
 TEXT_THICKNESS = 1
 TEXT_LINE = 21
+AUTOFRAME_TARGET_SIZE = (1500, 2000)
+AUTOFRAME_MAX_DETECT_WIDTH = 1280
+AUTOFRAME_MIN_FACE_SIZE = 36
 PREFERRED_CAMERA_RESOLUTIONS = [
     (1280, 720),
     (1920, 1080),
@@ -633,6 +636,157 @@ def frame_looks_usable(frame) -> bool:
     if std_value < MIN_FRAME_STD:
         return False
     return True
+
+
+def _autoframe_face_cascades() -> list[cv2.CascadeClassifier]:
+    return [
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml"),
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml"),
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml"),
+    ]
+
+
+def _autoframe_score_face(
+    box: tuple[int, int, int, int],
+    width: int,
+    height: int,
+) -> float:
+    x, y, w, h = box
+    area = float(w * h)
+    cx = x + w / 2
+    cy = y + h / 2
+    center_bias = 1.0 - min(
+        1.0,
+        (abs(cx - width / 2) / max(1, width)) * 1.05 + (abs(cy - height * 0.42) / max(1, height)) * 0.55,
+    )
+    aspect = w / max(1, h)
+    aspect_penalty = 1.0 - min(0.32, abs(aspect - 0.78) * 0.15)
+    return area * max(0.2, center_bias) * aspect_penalty
+
+
+def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+    if frame.size == 0:
+        return None
+
+    height, width = frame.shape[:2]
+    detect_frame = frame
+    scale = 1.0
+    if width > AUTOFRAME_MAX_DETECT_WIDTH:
+        scale = AUTOFRAME_MAX_DETECT_WIDTH / width
+        detect_frame = cv2.resize(frame, (AUTOFRAME_MAX_DETECT_WIDTH, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+
+    gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.equalizeHist(gray)
+
+    candidates: list[tuple[int, int, int, int]] = []
+    for cascade in _autoframe_face_cascades():
+        if cascade.empty():
+            continue
+        for search_frame, mirrored in ((gray, False), (cv2.flip(gray, 1), True)):
+            faces = cascade.detectMultiScale(
+                search_frame,
+                scaleFactor=1.04,
+                minNeighbors=4,
+                minSize=(AUTOFRAME_MIN_FACE_SIZE, AUTOFRAME_MIN_FACE_SIZE),
+            )
+            for fx, fy, fw, fh in faces:
+                if mirrored:
+                    fx = search_frame.shape[1] - fx - fw
+                if scale != 1.0:
+                    fx = int(fx / scale)
+                    fy = int(fy / scale)
+                    fw = int(fw / scale)
+                    fh = int(fh / scale)
+                candidates.append((fx, fy, fw, fh))
+
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda box: _autoframe_score_face(box, width, height))
+    x, y, w, h = best
+    x = max(0, min(x, width - 1))
+    y = max(0, min(y, height - 1))
+    w = max(1, min(w, width - x))
+    h = max(1, min(h, height - y))
+    return x, y, w, h
+
+
+def _autoframe_build_crop_box(width: int, height: int, face_box: Optional[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+    target_ratio = 3 / 4
+    max_crop_h = min(height, int(width / target_ratio))
+    max_crop_w = int(max_crop_h * target_ratio)
+
+    if face_box is None:
+        crop_h = max(220, int(max_crop_h * 0.95))
+        crop_w = int(crop_h * target_ratio)
+        x1 = (width - crop_w) // 2
+        y1 = (height - crop_h) // 2
+    else:
+        fx, fy, fw, fh = face_box
+        face_cx = fx + fw / 2
+        face_cy = fy + fh / 2
+
+        crop_h = max(int(fh * 4.1), int(height * 0.76))
+        crop_h = min(crop_h, max_crop_h)
+        crop_w = int(crop_h * target_ratio)
+
+        x1 = int(face_cx - crop_w / 2)
+        y1 = int(face_cy - crop_h * 0.42)
+
+        if fx < width * 0.30:
+            x1 = int(face_cx - crop_w * 0.40)
+        elif fx > width * 0.70:
+            x1 = int(face_cx - crop_w * 0.60)
+
+        if fy < height * 0.28:
+            y1 = int(face_cy - crop_h * 0.30)
+        else:
+            y1 = int(face_cy - crop_h * 0.38)
+
+    crop_w = min(crop_w, max_crop_w)
+    crop_h = min(crop_h, height)
+    x1 = max(0, min(x1, width - crop_w))
+    y1 = max(0, min(y1, height - crop_h))
+    return x1, y1, x1 + crop_w, y1 + crop_h
+
+
+def _autoframe_crop_frame(frame: np.ndarray, crop_box: tuple[int, int, int, int], output_size: tuple[int, int] = AUTOFRAME_TARGET_SIZE) -> np.ndarray:
+    x1, y1, x2, y2 = crop_box
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return frame.copy()
+    crop_h, crop_w = crop.shape[:2]
+    target_w, target_h = output_size
+    interpolation = cv2.INTER_AREA if target_w < crop_w or target_h < crop_h else cv2.INTER_CUBIC
+    return cv2.resize(crop, output_size, interpolation=interpolation)
+
+
+def autoframe_photo_file(image_path: Path, backup_path: Optional[Path] = None) -> tuple[bool, str]:
+    try:
+        image = cv2.imread(str(image_path))
+        if image is None:
+            return False, f"No se pudo leer {image_path}"
+
+        face_box = _autoframe_detect_face(image)
+        crop_box = _autoframe_build_crop_box(image.shape[1], image.shape[0], face_box)
+        framed = _autoframe_crop_frame(image, crop_box)
+
+        tmp_main = image_path.with_name(f"{image_path.stem}.__autoframe_tmp{image_path.suffix}")
+        if not cv2.imwrite(str(tmp_main), framed):
+            return False, f"No se pudo escribir temporal {tmp_main.name}"
+        tmp_main.replace(image_path)
+
+        if backup_path is not None:
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_backup = backup_path.with_name(f"{backup_path.stem}.__autoframe_tmp{backup_path.suffix}")
+            if not cv2.imwrite(str(tmp_backup), framed):
+                return False, f"No se pudo escribir respaldo temporal {tmp_backup.name}"
+            tmp_backup.replace(backup_path)
+
+        return True, f"Reencuadre aplicado a {image_path.name}"
+    except Exception as exc:
+        return False, f"Error de reencuadre en {image_path.name}: {exc}"
 
 
 def try_open_camera(

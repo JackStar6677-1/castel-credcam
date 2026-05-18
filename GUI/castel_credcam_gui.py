@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import subprocess
 import sys
+import threading
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -182,6 +184,8 @@ class CastelCredCamGUI:
         self.current_frame = None
         self.tk_image = None
         self.session: Optional[GuiSession] = None
+        self.autoframe_jobs: dict[Path, threading.Thread] = {}
+        self.autoframe_jobs_lock = threading.Lock()
         self.student_entry: Optional[ttk.Entry] = None
         self.student_manual_frame: Optional[tk.Frame] = None
         self.student_clear_button: Optional[ttk.Button] = None
@@ -2024,6 +2028,7 @@ class CastelCredCamGUI:
         try:
             ensure_photo_backup(image_path, backup_path)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
+            self._launch_photo_autoframe(image_path, backup_path)
         except Exception as exc:
             self.logger.exception("Backup copy failed for %s: %s", filename, exc)
             backup_status = f"respaldo parcial: {exc}"
@@ -2066,6 +2071,11 @@ class CastelCredCamGUI:
 
         record = self.session.records.pop()
         image_path = self.session.session_dir / record.filename
+        if not self._wait_for_autoframe_job(image_path, timeout=10.0):
+            self.logger.warning("Retake delayed: autoframe still running for %s", image_path.name)
+            messagebox.showwarning(APP_TITLE, "Todavia estoy reencuadrando la foto anterior. Espera un momento y vuelve a intentarlo.")
+            self.session.records.append(record)
+            return
         if image_path.exists():
             image_path.unlink()
         append_retake_audit(self.session.backup_dir, record, note="reintento")
@@ -2115,6 +2125,50 @@ class CastelCredCamGUI:
             return f"{record.id:03d}  {record.filename}  {record.student_name}{rut}"
 
         self.recent_var.set("\n".join(describe(r) for r in self.session.records[-6:]))
+
+    def _autoframe_script_path(self) -> Path:
+        return APP_ROOT / "photo_autoframe.py"
+
+    def _launch_photo_autoframe(self, image_path: Path, backup_path: Path) -> None:
+        script_path = self._autoframe_script_path()
+        if not script_path.exists():
+            self.logger.warning("Auto frame helper missing: %s", script_path)
+            return
+
+        def worker() -> None:
+            command = [sys.executable, str(script_path), str(image_path), "--backup", str(backup_path)]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
+                stdout = (result.stdout or "").strip()
+                stderr = (result.stderr or "").strip()
+                if stdout:
+                    self.logger.info("AutoFrame %s: %s", image_path.name, stdout)
+                if stderr:
+                    self.logger.warning("AutoFrame stderr %s: %s", image_path.name, stderr)
+                if result.returncode != 0:
+                    self.logger.warning("AutoFrame returned %s for %s", result.returncode, image_path.name)
+            except Exception as exc:
+                self.logger.exception("AutoFrame worker failed for %s: %s", image_path, exc)
+            finally:
+                with self.autoframe_jobs_lock:
+                    self.autoframe_jobs.pop(image_path, None)
+
+        thread = threading.Thread(target=worker, name=f"autoframe-{image_path.stem}", daemon=True)
+        with self.autoframe_jobs_lock:
+            self.autoframe_jobs[image_path] = thread
+        thread.start()
+
+    def _wait_for_autoframe_job(self, image_path: Path, timeout: float = 10.0) -> bool:
+        with self.autoframe_jobs_lock:
+            thread = self.autoframe_jobs.get(image_path)
+        if thread is None:
+            return True
+        thread.join(timeout)
+        if thread.is_alive():
+            return False
+        with self.autoframe_jobs_lock:
+            self.autoframe_jobs.pop(image_path, None)
+        return True
 
     def _bind_shortcuts(self) -> None:
         self.root.bind("<Return>", self._handle_global_return)
