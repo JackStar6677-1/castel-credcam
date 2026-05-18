@@ -690,7 +690,7 @@ class CastelCredCamQt(QMainWindow):
         self.source_list = QListWidget()
         self.source_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.source_list.currentRowChanged.connect(self._on_source_selected)
-        self.source_list.setMinimumHeight(140)
+        self.source_list.setMinimumHeight(112)
         camera_layout.addWidget(self.source_list)
 
         self.camera_combo = QComboBox()
@@ -841,13 +841,13 @@ class CastelCredCamQt(QMainWindow):
         self.main_splitter.addWidget(self.course_tab)
         self.main_splitter.setStretchFactor(0, 3)
         self.main_splitter.setStretchFactor(1, 2)
-        self.main_splitter.setSizes([760, 380])
+        self.main_splitter.setSizes([800, 340])
 
         splitter.addWidget(self.sidebar_scroll)
         splitter.addWidget(self.main_splitter)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([340, 1260])
+        splitter.setSizes([300, 1300])
 
         self.status_label = QLabel("Listo para iniciar. Selecciona camara, carga lista y abre sesion.")
         self.status_label.setObjectName("Status")
@@ -865,7 +865,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_frame = QFrame()
         self.preview_frame.setObjectName("CapturePanel")
         self.preview_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.preview_frame.setMinimumHeight(560)
+        self.preview_frame.setMinimumHeight(540)
         preview_layout = QVBoxLayout(self.preview_frame)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(0)
