@@ -107,6 +107,7 @@ COMMON_CAMERA_RESOLUTIONS: list[tuple[int, int]] = [
 ]
 RESOLUTION_AUTO_LABEL = "Automatico"
 FACE_DETECT_MAX_WIDTH = 1600
+PREVIEW_MAX_WIDTH = 1280
 FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
@@ -325,8 +326,9 @@ class CameraThread(QThread):
                 frame_count += 1
                 if frame_count == 1 or frame_count % 60 == 0:
                     self.camera_message.emit(f"Frame recibido #{frame_count} en camara {self.camera_index}")
-                self.frame_ready.emit(frame.copy())
-                self.msleep(25)
+                if frame_count % 2 == 0:
+                    self.frame_ready.emit(frame)
+                self.msleep(40)
         except Exception as exc:
             self.camera_error.emit(str(exc))
         finally:
@@ -373,6 +375,7 @@ class CastelCredCamQt(QMainWindow):
         self.current_eye_centers: list[tuple[int, int]] = []
         self.current_crop_box: Optional[tuple[int, int, int, int]] = None
         self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
+        self.preview_stable_crop_box: Optional[tuple[int, int, int, int]] = None
         self.last_face_detect_frame = -9999
         self.crop_manual_dx = 0.0
         self.crop_manual_dy = 0.0
@@ -397,7 +400,7 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
-        self.preview_render_timer.setInterval(33)
+        self.preview_render_timer.setInterval(50)
         self.preview_render_timer.timeout.connect(self._render_preview_safe)
         self.first_frame_timer = QTimer(self)
         self.first_frame_timer.setSingleShot(True)
@@ -2057,14 +2060,18 @@ class CastelCredCamQt(QMainWindow):
                     candidates.append((fx, fy, fw, fh))
         return candidates
 
-    def _detect_primary_face(self, frame: np.ndarray) -> Optional[tuple[int, int, int, int]]:
-        if self.frame_counter % 2 != 0 and self.current_face_box is not None:
+    def _detect_primary_face(
+        self,
+        frame: np.ndarray,
+        update_state: bool = True,
+    ) -> Optional[tuple[int, int, int, int]]:
+        if update_state and self.frame_counter % 2 != 0 and self.current_face_box is not None:
             return self.current_face_box
         if not self.face_cascades or all(cascade.empty() for cascade in self.face_cascades):
             return None
         height, width = frame.shape[:2]
         search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
-        if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
+        if update_state and self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
             roi = self._expand_box(self.current_face_box, width, height, scale=2.15, pad_x=32, pad_y=32)
             x1, y1, x2, y2 = roi
             search_frames.insert(0, (frame[y1:y2, x1:x2], False, (x1, y1)))
@@ -2078,10 +2085,11 @@ class CastelCredCamQt(QMainWindow):
                 break
 
         if not candidates:
-            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
+            if update_state and self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 return self.current_face_box
-            self.current_face_box = None
-            self.current_eye_centers = []
+            if update_state:
+                self.current_face_box = None
+                self.current_eye_centers = []
             return None
 
         detection_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -2095,7 +2103,7 @@ class CastelCredCamQt(QMainWindow):
                 continue
             eyes = self._detect_eyes_in_face(detection_gray, (x, y, w, h))
             score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
-            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
+            if update_state and self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 prev_x, prev_y, prev_w, prev_h = self.current_face_box
                 prev_cx = prev_x + prev_w / 2
                 prev_cy = prev_y + prev_h / 2
@@ -2109,22 +2117,25 @@ class CastelCredCamQt(QMainWindow):
                 best_eyes = eyes
 
         if best_face is None:
-            if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
+            if update_state and self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 return self.current_face_box
-            self.current_face_box = None
-            self.current_eye_centers = []
+            if update_state:
+                self.current_face_box = None
+                self.current_eye_centers = []
             return None
 
-        self.current_face_box = best_face
-        self.current_eye_centers = best_eyes
-        self.last_face_detect_frame = self.frame_counter
-        return self.current_face_box
+        if update_state:
+            self.current_face_box = best_face
+            self.current_eye_centers = best_eyes
+            self.last_face_detect_frame = self.frame_counter
+            return self.current_face_box
+        return best_face
 
     def _render_preview(self) -> None:
         if self.latest_frame is None:
             self._show_preview_message("Esperando señal de camara...")
             return
-        frame = self._apply_settings_to_frame(self.latest_frame, for_preview=True)
+        frame = self._render_preview_frame(self.latest_frame)
 
         if self.guide_check.isChecked() or self.face_check.isChecked():
             info_lines = self._preview_status_lines()
@@ -2142,6 +2153,93 @@ class CastelCredCamQt(QMainWindow):
         )
         self.preview_label.setPixmap(scaled)
         self.preview_label.setText("")
+
+    def _render_preview_frame(self, frame: np.ndarray) -> np.ndarray:
+        preview_frame = frame
+        width = frame.shape[1]
+        if width > PREVIEW_MAX_WIDTH:
+            scale = PREVIEW_MAX_WIDTH / width
+            preview_frame = cv2.resize(
+                frame,
+                (PREVIEW_MAX_WIDTH, max(1, int(frame.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        transformed = preview_frame.copy()
+        if self.mirror_check.isChecked():
+            transformed = cv2.flip(transformed, 1)
+        transformed = _rotate_frame(transformed, self.rotation_combo.currentText())
+
+        detect_face = self.face_check.isChecked() or self.crop_check.isChecked()
+        face_box = self._detect_primary_face(transformed, update_state=False) if detect_face else None
+        crop_box: Optional[tuple[int, int, int, int]] = None
+
+        if self.crop_check.isChecked():
+            eye_centers: list[tuple[int, int]] = []
+            if face_box is not None:
+                gray = cv2.cvtColor(transformed, cv2.COLOR_BGR2GRAY)
+                eye_centers = self._detect_eyes_in_face(gray, face_box)
+            crop_box = self._compute_portrait_crop_box(
+                transformed.shape[1],
+                transformed.shape[0],
+                face_box,
+                eye_centers,
+            )
+            crop_box = self._smooth_preview_crop_box(crop_box)
+            crop_box = self._apply_manual_crop_tuning(crop_box, transformed.shape[1], transformed.shape[0])
+            transformed = self._crop_frame_with_box(transformed, crop_box, output_size=(900, 1200))
+        else:
+            self.preview_stable_crop_box = None
+
+        if self.guide_check.isChecked():
+            self._draw_context_guides(transformed, preview_frame.shape[1], preview_frame.shape[0], crop_box, face_box)
+        if self.face_check.isChecked() and face_box is not None:
+            self._draw_face_anchor(transformed, crop_box, face_box)
+
+        return transformed
+
+    def _smooth_preview_crop_box(self, next_box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        if self.preview_stable_crop_box is None:
+            self.preview_stable_crop_box = next_box
+            return next_box
+
+        prev_x1, prev_y1, prev_x2, prev_y2 = self.preview_stable_crop_box
+        next_x1, next_y1, next_x2, next_y2 = next_box
+        prev_w = prev_x2 - prev_x1
+        prev_h = prev_y2 - prev_y1
+        next_w = next_x2 - next_x1
+        next_h = next_y2 - next_y1
+
+        move_threshold_x = max(10, int(prev_w * 0.06))
+        move_threshold_y = max(10, int(prev_h * 0.06))
+        size_threshold_w = max(12, int(prev_w * 0.08))
+        size_threshold_h = max(12, int(prev_h * 0.08))
+
+        if (
+            abs(next_x1 - prev_x1) < move_threshold_x
+            and abs(next_y1 - prev_y1) < move_threshold_y
+            and abs(next_w - prev_w) < size_threshold_w
+            and abs(next_h - prev_h) < size_threshold_h
+        ):
+            return self.preview_stable_crop_box
+
+        alpha = 0.24
+        prev_cx = (prev_x1 + prev_x2) / 2
+        prev_cy = (prev_y1 + prev_y2) / 2
+        next_cx = (next_x1 + next_x2) / 2
+        next_cy = (next_y1 + next_y2) / 2
+
+        blended_cx = prev_cx + (next_cx - prev_cx) * alpha
+        blended_cy = prev_cy + (next_cy - prev_cy) * alpha
+        blended_h = max(260, prev_h + (next_h - prev_h) * alpha)
+        blended_w = blended_h * (3 / 4)
+
+        x1 = int(blended_cx - blended_w / 2)
+        y1 = int(blended_cy - blended_h / 2)
+        x2 = int(x1 + blended_w)
+        y2 = int(y1 + blended_h)
+        self.preview_stable_crop_box = (x1, y1, x2, y2)
+        return self.preview_stable_crop_box
 
     def _draw_preview_banner(self, frame: np.ndarray, lines: list[str], banner_height: int) -> None:
         y = 22
@@ -2190,7 +2288,7 @@ class CastelCredCamQt(QMainWindow):
                 self.preview_render_timer.stop()
             else:
                 return
-        delay_ms = 1 if immediate else 33
+        delay_ms = 1 if immediate else 50
         self.preview_render_timer.start(delay_ms)
 
     def _render_preview_safe(self) -> None:
