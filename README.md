@@ -245,11 +245,11 @@ Se ignoran normalmente:
 - entornos virtuales
 - archivos locales de editor y sistema
 
-## Si quieres ir más lejos
+## Notas de mejora
 
-Puedo dejar este README todavía más visual con:
+Más adelante se le puede sumar:
 
-- una captura real de la GUI.
+- una captura real de la GUI principal.
 - un GIF corto del flujo de captura.
-- una tabla de cursos y salidas.
-- un diagrama más detallado de la ruta de datos.
+- una tabla simple con cursos y salidas.
+- un diagrama más fino de la ruta de datos.
