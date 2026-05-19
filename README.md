@@ -2,6 +2,8 @@
 
 > Captura de fotos tipo credencial por curso, con respaldo espejo, roster, trazabilidad y reencuadre automático postfoto.
 
+![CastelCredCam Studio](assets/readme-hero.svg)
+
 CastelCredCam está pensada para jornadas reales de fotografía escolar: abrir cámara, avanzar alumno por alumno, guardar cada toma con nombre claro, mantener una copia espejo y dejar registro en CSV y logs para que la sesión sea recuperable incluso si algo falla a mitad de camino.
 
 ## Vista rápida
@@ -251,4 +253,3 @@ Puedo dejar este README todavía más visual con:
 - un GIF corto del flujo de captura.
 - una tabla de cursos y salidas.
 - un diagrama más detallado de la ruta de datos.
-
