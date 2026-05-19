@@ -50,11 +50,11 @@ AUTOFRAME_MAX_DETECT_WIDTH = 1280
 AUTOFRAME_MIN_FACE_SIZE = 36
 AUTOFRAME_MIN_EYE_W = 12
 AUTOFRAME_MIN_EYE_H = 8
-AUTOFRAME_FACE_EXPANSION = 3.15
-AUTOFRAME_FACE_HEIGHT_RATIO = 0.74
-AUTOFRAME_EYE_TOP_RATIO = 0.30
-AUTOFRAME_CHEST_MARGIN_RATIO = 0.18
-AUTOFRAME_FALLBACK_HEIGHT_RATIO = 0.95
+AUTOFRAME_FACE_EXPANSION = 1.85
+AUTOFRAME_FACE_HEIGHT_RATIO = 0.60
+AUTOFRAME_EYE_TOP_RATIO = 0.24
+AUTOFRAME_CHEST_MARGIN_RATIO = 0.10
+AUTOFRAME_FALLBACK_HEIGHT_RATIO = 0.82
 PREFERRED_CAMERA_RESOLUTIONS = [
     (1280, 720),
     (1920, 1080),
@@ -782,6 +782,7 @@ def _autoframe_build_crop_box(
         face_cy = fy + fh / 2
 
         crop_h = max(int(fh * AUTOFRAME_FACE_EXPANSION), int(height * AUTOFRAME_FACE_HEIGHT_RATIO))
+        crop_h = min(crop_h, max(220, int(height * 0.88)))
         crop_h = min(crop_h, max_crop_h)
         crop_w = int(crop_h * target_ratio)
 
@@ -799,7 +800,7 @@ def _autoframe_build_crop_box(
         elif fy < height * 0.28:
             y1 = int(face_cy - crop_h * 0.32)
         else:
-            y1 = int(face_cy - crop_h * 0.40)
+            y1 = int(face_cy - crop_h * 0.30)
 
         chest_margin = max(18, int(fh * AUTOFRAME_CHEST_MARGIN_RATIO))
         y1 = min(y1, height - crop_h + chest_margin)
@@ -828,7 +829,7 @@ def _autoframe_build_crop_box(
                 face_center_bias = 1.0 - min(
                     1.0,
                     (abs((face_cx - cand_x1) - crop_w * 0.5) / max(1, crop_w)) * 1.2
-                    + (abs((face_cy - cand_y1) - crop_h * 0.40) / max(1, crop_h)) * 0.9,
+                    + (abs((face_cy - cand_y1) - crop_h * 0.32) / max(1, crop_h)) * 0.9,
                 )
                 room_bonus = min(1.6, (margin_top + margin_bottom * 1.2 + margin_left * 0.7 + margin_right * 0.7) / max(1, crop_h))
                 score = face_center_bias + room_bonus

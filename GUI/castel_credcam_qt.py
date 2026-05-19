@@ -396,6 +396,7 @@ class CastelCredCamQt(QMainWindow):
         self.crop_manual_dx = 0.0
         self.crop_manual_dy = 0.0
         self.crop_manual_zoom = 1.0
+        self.pending_capture_identity: Optional[tuple[str, str, Optional[int]]] = None
         self.face_cascades = [
             cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
             cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml"),
@@ -1762,6 +1763,7 @@ class CastelCredCamQt(QMainWindow):
         self.logger.info("Session closed. records=%s csv=%s", len(self.session.records), self.session.csv_path)
         self.status_label.setText("Sesion cerrada.")
         self.session = None
+        self.pending_capture_identity = None
         self._update_session_labels()
         self._sync_session_ui()
         self._refresh_course_view(force=True)
@@ -1820,9 +1822,9 @@ class CastelCredCamQt(QMainWindow):
             fx, fy, fw, fh = face_box
             face_cx = fx + fw / 2
             face_cy = fy + fh / 2
-            # Abrimos un poco más el encuadre para que no corte hombros o mejilla
-            # cuando el estudiante queda muy cerca del borde izquierdo/derecho.
-            crop_h = max(int(fh * 3.08), int(height * 0.70))
+            # Abrimos lo justo para sostener hombros y cara sin dejar tanto aire vacío.
+            crop_h = max(int(fh * 1.85), int(height * 0.60))
+            crop_h = min(crop_h, max(220, int(height * 0.88)))
             crop_h = min(crop_h, max_crop_h)
             crop_w = int(crop_h * target_ratio)
             if fx < width * 0.36:
@@ -1833,11 +1835,11 @@ class CastelCredCamQt(QMainWindow):
                 x1 = int(face_cx - crop_w / 2)
             if eye_centers:
                 eye_y = sum(pt[1] for pt in eye_centers) / len(eye_centers)
-                y1 = int(eye_y - crop_h * 0.30)
+                y1 = int(eye_y - crop_h * 0.24)
             else:
-                y1 = int(face_cy - crop_h * 0.38)
+                y1 = int(face_cy - crop_h * 0.30)
         else:
-            crop_h = int(max_crop_h * 0.97)
+            crop_h = int(max_crop_h * 0.82)
             crop_h = max(CROP_MIN_HEIGHT, crop_h)
             crop_w = int(crop_h * target_ratio)
             x1 = (width - crop_w) // 2
@@ -2395,19 +2397,23 @@ class CastelCredCamQt(QMainWindow):
         self._show_preview_message("La camara abre, pero no entrega imagen")
 
     def _current_capture_student(self) -> tuple[str, str]:
+        name, rut, _roster_index = self._capture_identity_snapshot()
+        return name, rut
+
+    def _capture_identity_snapshot(self) -> tuple[str, str, Optional[int]]:
         if self.session and self.session.has_roster:
             current = self.session.current_student()
             if current is not None:
-                return current.display_name, current.rut
-        return self.student_edit.text().strip(), ""
+                return current.display_name, current.rut, self.session.roster_index
+        return self.student_edit.text().strip(), "", None
 
-    def _save_capture(self, frame: np.ndarray) -> None:
+    def _save_capture(self, frame: np.ndarray, capture_identity: Optional[tuple[str, str, Optional[int]]] = None) -> None:
         if self.session is None:
             self.status_label.setText("Primero inicia una sesion.")
             self.logger.warning("Capture requested without active session.")
             return
 
-        student_name, rut = self._current_capture_student()
+        student_name, rut, roster_index = capture_identity or self._capture_identity_snapshot()
         if not student_name:
             self.status_label.setText("Escribe o selecciona un estudiante antes de capturar.")
             return
@@ -2415,6 +2421,9 @@ class CastelCredCamQt(QMainWindow):
         if self.session.has_roster and self.session.current_student() is None:
             self.status_label.setText("La nomina ya termino.")
             return
+
+        if self.session.has_roster and roster_index is not None and 0 <= roster_index < self.session.roster_total:
+            self.session.roster_index = roster_index
 
         self.frame_counter += 1
         transformed = self._apply_settings_to_frame(frame, for_preview=False)
@@ -2478,15 +2487,21 @@ class CastelCredCamQt(QMainWindow):
             self.status_label.setText("No hay frame de camara disponible.")
             return
 
+        capture_identity = self._capture_identity_snapshot()
+        if not capture_identity[0]:
+            self.status_label.setText("Escribe o selecciona un estudiante antes de capturar.")
+            return
+        self.pending_capture_identity = capture_identity
         countdown = int(self.countdown_combo.currentText().split()[0])
         if countdown > 0:
             self.countdown_remaining = countdown
-            self.status_label.setText(f"Captura en {self.countdown_remaining}s")
+            self.status_label.setText(f"Captura en {self.countdown_remaining}s | {capture_identity[0]}")
             self.countdown_timer.start()
             self._schedule_preview_render(immediate=True)
             return
 
-        self._save_capture(frame.copy())
+        self._save_capture(frame.copy(), capture_identity)
+        self.pending_capture_identity = None
 
     def _countdown_tick(self) -> None:
         if self.countdown_remaining <= 1:
@@ -2494,16 +2509,20 @@ class CastelCredCamQt(QMainWindow):
             self.countdown_remaining = 0
             frame = self._pull_latest_preview_frame()
             if frame is not None:
-                self._save_capture(frame.copy())
+                self._save_capture(frame.copy(), self.pending_capture_identity)
+            self.pending_capture_identity = None
             return
         self.countdown_remaining -= 1
-        self.status_label.setText(f"Captura en {self.countdown_remaining}s")
+        target_name = self.pending_capture_identity[0] if self.pending_capture_identity else ""
+        suffix = f" | {target_name}" if target_name else ""
+        self.status_label.setText(f"Captura en {self.countdown_remaining}s{suffix}")
         self._schedule_preview_render(immediate=True)
 
     def retake_last(self) -> None:
         if self.session is None or not self.session.records:
             self.status_label.setText("No hay foto para rehacer.")
             return
+        self.pending_capture_identity = None
 
         last_record = self.session.records.pop()
         image_path = self.session.session_dir / last_record.filename
