@@ -116,10 +116,10 @@ Utilidad independiente que captura imágenes de diagnóstico para verificar cám
 
 En las interfaces Qt y Tk, la foto no depende solo de cómo se vea el preview. La GUI guarda la toma con sus ajustes activos, crea el respaldo y ejecuta `photo_autoframe.py` en segundo plano sobre el JPG principal. El postproceso:
 
-- busca candidatos de rostro y prioriza los confirmados por ojos.
+- busca candidatos de rostro y solo reemplaza la foto si confirma un par de ojos con separación y altura plausibles.
 - descarta candidatos bajos sin confirmación que suelen ser ropa o mobiliario.
 - reserva margen sobre la cara para no cortar cabello o cabeza.
-- usa un encuadre centrado conservador si no encuentra un rostro confiable.
+- conserva la imagen guardada sin aplicar un segundo recorte si no encuentra un rostro confiable.
 - escribe en `logs/autoframe_*.log` qué candidato eligió o descartó y qué caja final aplicó.
 
 El respaldo representa la imagen guardada por la GUI antes de este postproceso. Si el recorte tipo credencial ya estaba activo al capturar, ese ajuste ya forma parte del respaldo.
