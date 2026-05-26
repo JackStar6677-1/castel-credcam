@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from castel_credcam import autoframe_photo_file
+from castel_credcam import autoframe_photo_file, setup_logging
 
 
 def main() -> int:
@@ -13,8 +13,11 @@ def main() -> int:
     parser.add_argument("--backup", type=Path, default=None, help="Ruta opcional del respaldo espejo.")
     args = parser.parse_args()
 
-    ok, message = autoframe_photo_file(args.image, args.backup)
-    print(message)
+    logger, log_path = setup_logging(Path(__file__).resolve().parent, "autoframe")
+    logger.info("=== Photo autoframe start ===")
+    logger.info("Diagnostic log: %s", log_path)
+    ok, message = autoframe_photo_file(args.image, args.backup, diagnostic_logger=logger)
+    logger.info("Photo autoframe end: ok=%s message=%s", ok, message)
     return 0 if ok else 1
 
 

@@ -1621,14 +1621,29 @@ class CastelCredCamGUI:
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
-        best_face: Optional[tuple[int, int, int, int]] = None
-        best_eyes: list[tuple[int, int]] = []
-        best_score = -1.0
+        evaluated_candidates: list[tuple[tuple[int, int, int, int], list[tuple[int, int]]]] = []
         for box in candidates:
             x, y, w, h = self._clip_box(box, width, height)
             if w < 36 or h < 36:
                 continue
             eyes = self._detect_eyes_in_face(gray, (x, y, w, h))
+            evaluated_candidates.append(((x, y, w, h), eyes))
+
+        verified = [candidate for candidate in evaluated_candidates if len(candidate[1]) >= 2]
+        if verified:
+            selection_pool = verified
+        else:
+            # Avoid anchoring the portrait to a large false positive on clothing or furniture.
+            selection_pool = [
+                candidate
+                for candidate in evaluated_candidates
+                if candidate[0][1] + candidate[0][3] / 2 <= height * 0.62
+            ]
+
+        best_face: Optional[tuple[int, int, int, int]] = None
+        best_eyes: list[tuple[int, int]] = []
+        best_score = -1.0
+        for (x, y, w, h), eyes in selection_pool:
             score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
             if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 prev_x, prev_y, prev_w, prev_h = self.current_face_box
@@ -1686,6 +1701,8 @@ class CastelCredCamGUI:
                 y1 = int(eye_y - crop_h * 0.24)
             else:
                 y1 = int(face_cy - crop_h * 0.30)
+            # Haar commonly starts inside the hairline; always reserve visible headroom.
+            y1 = min(y1, int(fy - fh * 0.30))
         else:
             crop_h = int(max_crop_h * 0.82)
             crop_h = max(CROP_MIN_HEIGHT, crop_h)

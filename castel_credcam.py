@@ -695,7 +695,7 @@ def _autoframe_detect_eyes(gray: np.ndarray, face_box: tuple[int, int, int, int]
             minSize=(max(AUTOFRAME_MIN_EYE_W, w // 12), max(AUTOFRAME_MIN_EYE_H, h // 14)),
         )
         for ex, ey, ew, eh in eyes:
-            eye_centers.append((x + ex + ew // 2, y + ey + eh // 2))
+            eye_centers.append((int(x + ex + ew // 2), int(y + ey + eh // 2)))
         if len(eye_centers) >= 2:
             break
 
@@ -709,8 +709,13 @@ def _autoframe_detect_eyes(gray: np.ndarray, face_box: tuple[int, int, int, int]
     return unique
 
 
-def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+def _autoframe_detect_face(
+    frame: np.ndarray,
+    diagnostic_logger: Optional[logging.Logger] = None,
+) -> Optional[tuple[int, int, int, int]]:
     if frame.size == 0:
+        if diagnostic_logger is not None:
+            diagnostic_logger.warning("Autoframe decision: frame vacio, se omite deteccion.")
         return None
 
     height, width = frame.shape[:2]
@@ -750,14 +755,73 @@ def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, i
                     candidates.append((fx, fy, fw, fh))
 
     if not candidates:
+        if diagnostic_logger is not None:
+            diagnostic_logger.info("Autoframe decision: candidatos=0, se usara encuadre centrado de respaldo.")
         return None
 
-    best = max(candidates, key=lambda box: _autoframe_score_face(box, width, height))
-    x, y, w, h = best
-    x = max(0, min(x, width - 1))
-    y = max(0, min(y, height - 1))
-    w = max(1, min(w, width - x))
-    h = max(1, min(h, height - y))
+    detection_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    evaluated_candidates: list[tuple[tuple[int, int, int, int], list[tuple[int, int]]]] = []
+    for x, y, w, h in candidates:
+        x = max(0, min(x, width - 1))
+        y = max(0, min(y, height - 1))
+        w = max(1, min(w, width - x))
+        h = max(1, min(h, height - y))
+        clipped_box = (x, y, w, h)
+        evaluated_candidates.append((clipped_box, _autoframe_detect_eyes(detection_gray, clipped_box)))
+
+    verified = [candidate for candidate in evaluated_candidates if len(candidate[1]) >= 2]
+    plausible_without_eyes = [
+        candidate
+        for candidate in evaluated_candidates
+        if candidate[0][1] + candidate[0][3] / 2 <= height * 0.62
+    ]
+    if diagnostic_logger is not None:
+        diagnostic_logger.info(
+            "Autoframe candidates: total=%s confirmados_por_ojos=%s plausibles_por_altura=%s.",
+            len(evaluated_candidates),
+            len(verified),
+            len(plausible_without_eyes),
+        )
+    if verified:
+        selection_pool = verified
+        selection_reason = "ojos_confirmados"
+    else:
+        # Clothing and furniture can produce large false faces below the head.
+        # If no eyes confirm a face, prefer a broad fallback to a bad zoom.
+        selection_pool = plausible_without_eyes
+        selection_reason = "posicion_superior_sin_ojos"
+        if not selection_pool:
+            if diagnostic_logger is not None:
+                diagnostic_logger.warning(
+                    "Autoframe decision: todos los candidatos sin ojos quedaron demasiado bajos; "
+                    "se evita zoom falso y se usa encuadre centrado."
+                )
+            return None
+
+    (x, y, w, h), eyes = max(
+        selection_pool,
+        key=lambda candidate: _autoframe_score_face(candidate[0], width, height, len(candidate[1])),
+    )
+    if diagnostic_logger is not None:
+        raw_best_box, raw_best_eyes = max(
+            evaluated_candidates,
+            key=lambda candidate: _autoframe_score_face(candidate[0], width, height, len(candidate[1])),
+        )
+        if raw_best_box != (x, y, w, h):
+            diagnostic_logger.info(
+                "Autoframe rejection: candidato_mayor=%s ojos=%s descartado_por=no_confirmar_ojos_o_altura; "
+                "elegido=%s.",
+                raw_best_box,
+                len(raw_best_eyes),
+                (x, y, w, h),
+            )
+        diagnostic_logger.info(
+            "Autoframe decision: rostro=%s motivo=%s ojos=%s score=%.1f.",
+            (x, y, w, h),
+            selection_reason,
+            len(eyes),
+            _autoframe_score_face((x, y, w, h), width, height, len(eyes)),
+        )
     return x, y, w, h
 
 
@@ -802,6 +866,8 @@ def _autoframe_build_crop_box(
         else:
             y1 = int(face_cy - crop_h * 0.30)
 
+        # Haar commonly starts inside the hairline; always reserve visible headroom.
+        y1 = min(y1, int(fy - fh * 0.30))
         chest_margin = max(18, int(fh * AUTOFRAME_CHEST_MARGIN_RATIO))
         y1 = min(y1, height - crop_h + chest_margin)
         x1 = min(x1, width - crop_w + max(12, int(fw * 0.18)))
@@ -856,31 +922,71 @@ def _autoframe_crop_frame(frame: np.ndarray, crop_box: tuple[int, int, int, int]
     return cv2.resize(crop, output_size, interpolation=interpolation)
 
 
-def autoframe_photo_file(image_path: Path, backup_path: Optional[Path] = None) -> tuple[bool, str]:
+def autoframe_photo_file(
+    image_path: Path,
+    backup_path: Optional[Path] = None,
+    diagnostic_logger: Optional[logging.Logger] = None,
+) -> tuple[bool, str]:
     try:
         image = cv2.imread(str(image_path))
         if image is None:
+            if diagnostic_logger is not None:
+                diagnostic_logger.error("Autoframe error: no se pudo leer %s.", image_path)
             return False, f"No se pudo leer {image_path}"
 
+        if diagnostic_logger is not None:
+            diagnostic_logger.info(
+                "Autoframe input: archivo=%s dimensiones=%sx%s backup=%s.",
+                image_path,
+                image.shape[1],
+                image.shape[0],
+                backup_path or "-",
+            )
         if backup_path is not None and not backup_path.exists():
             backup_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(image_path, backup_path)
+            if diagnostic_logger is not None:
+                diagnostic_logger.info("Autoframe backup: creado %s.", backup_path)
 
-        face_box = _autoframe_detect_face(image)
+        face_box = _autoframe_detect_face(image, diagnostic_logger)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         eye_centers = _autoframe_detect_eyes(gray, face_box) if face_box is not None else []
         crop_box = _autoframe_build_crop_box(image.shape[1], image.shape[0], face_box, eye_centers)
+        if diagnostic_logger is not None:
+            framing_reason = (
+                "fallback_centrado_sin_rostro_confiable"
+                if face_box is None
+                else "rostro_con_margen_superior_y_ancla_de_ojos"
+                if eye_centers
+                else "rostro_con_margen_superior"
+            )
+            diagnostic_logger.info(
+                "Autoframe crop: caja=%s salida=%s motivo=%s rostro=%s ojos=%s.",
+                crop_box,
+                AUTOFRAME_TARGET_SIZE,
+                framing_reason,
+                face_box or "-",
+                eye_centers or "-",
+            )
         framed = _autoframe_crop_frame(image, crop_box)
         if framed.size == 0:
+            if diagnostic_logger is not None:
+                diagnostic_logger.error("Autoframe error: crop vacio para %s.", image_path.name)
             return False, f"Crop vacio para {image_path.name}"
 
         tmp_main = image_path.with_name(f"{image_path.stem}.__autoframe_tmp{image_path.suffix}")
         if not cv2.imwrite(str(tmp_main), framed):
+            if diagnostic_logger is not None:
+                diagnostic_logger.error("Autoframe error: no se pudo escribir %s.", tmp_main)
             return False, f"No se pudo escribir temporal {tmp_main.name}"
         tmp_main.replace(image_path)
 
+        if diagnostic_logger is not None:
+            diagnostic_logger.info("Autoframe result: reencuadre aplicado a %s.", image_path.name)
         return True, f"Reencuadre aplicado a {image_path.name}"
     except Exception as exc:
+        if diagnostic_logger is not None:
+            diagnostic_logger.exception("Autoframe exception: %s.", exc)
         return False, f"Error de reencuadre en {image_path.name}: {exc}"
 
 
