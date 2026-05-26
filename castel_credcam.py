@@ -56,6 +56,7 @@ AUTOFRAME_MIN_EYE_H = 8
 AUTOFRAME_FACE_EXPANSION = 1.85
 AUTOFRAME_FACE_HEIGHT_RATIO = 0.60
 AUTOFRAME_EYE_TOP_RATIO = 0.24
+AUTOFRAME_HEADROOM_RATIO = 0.42
 AUTOFRAME_CHEST_MARGIN_RATIO = 0.10
 AUTOFRAME_FALLBACK_HEIGHT_RATIO = 0.82
 AUTOFRAME_MIN_EYE_SEPARATION_RATIO = 0.18
@@ -968,7 +969,8 @@ def _autoframe_build_crop_box(
             y1 = int(face_cy - crop_h * 0.30)
 
         # Haar commonly starts inside the hairline; always reserve visible headroom.
-        y1 = min(y1, int(fy - fh * 0.30))
+        headroom_y1 = int(fy - fh * AUTOFRAME_HEADROOM_RATIO)
+        y1 = min(y1, headroom_y1)
         chest_margin = max(18, int(fh * AUTOFRAME_CHEST_MARGIN_RATIO))
         y1 = min(y1, height - crop_h + chest_margin)
         x1 = min(x1, width - crop_w + max(12, int(fw * 0.18)))
@@ -981,7 +983,7 @@ def _autoframe_build_crop_box(
         for dx in search_offsets:
             for dy in (-0.08, 0.0, 0.08):
                 cand_x1 = int(face_cx - crop_w / 2 + crop_w * dx)
-                cand_y1 = int(y1 + crop_h * dy)
+                cand_y1 = min(int(y1 + crop_h * dy), headroom_y1)
                 cand_x1 = max(0, min(cand_x1, width - crop_w))
                 cand_y1 = max(0, min(cand_y1, height - crop_h))
                 cand_box = (cand_x1, cand_y1, cand_x1 + crop_w, cand_y1 + crop_h)
