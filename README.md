@@ -1,6 +1,6 @@
 # CastelCredCam
 
-> Captura de fotos tipo credencial por curso, con respaldo espejo, roster, trazabilidad y reencuadre automático postfoto.
+> Captura de fotos tipo credencial por curso, con respaldo espejo, roster, trazabilidad y reencuadre automático diagnosticable en las interfaces gráficas.
 
 ![CastelCredCam Studio](assets/readme-hero.svg)
 
@@ -10,25 +10,27 @@ CastelCredCam está pensada para jornadas reales de fotografía escolar: abrir c
 
 - Captura local en Windows, sin servicios externos.
 - GUI principal en PySide6 para operación real con roster.
-- Flujo por consola para pruebas rápidas y diagnóstico.
+- Flujo por consola para capturas rápidas sin roster ni autoframe postfoto.
 - Carga de nómina desde Excel o CSV.
 - Guardado por curso con `index.csv` y respaldo en `fotos_respaldo/`.
-- Reencuadre automático postfoto para centrar mejor la cara.
-- Reintento de la última captura con historial.
-- Logs técnicos para auditoría y soporte.
+- Reencuadre automático postfoto en las GUIs, con descarte de falsos rostros y margen para la cabeza.
+- Reintento de la última captura; auditoría persistente en Tk legacy y consola.
+- Logs técnicos de sesión y de decisión del autoframe para auditoría y soporte.
 
 ## Flujo de trabajo
 
 ```mermaid
 flowchart LR
-    A["Abrir cámara"] --> B["Cargar nómina"]
+    A["Abrir GUI Qt o Tk"] --> B["Cargar nómina (opcional)"]
     B --> C["Seleccionar curso"]
     C --> D["Capturar alumno"]
-    D --> E["Guardar JPG + CSV"]
-    E --> F["Copiar respaldo espejo"]
-    E --> G["Reencuadre automático"]
-    G --> H["Actualizar roster y avanzar"]
-    H --> D
+    D --> E["Aplicar ajustes de captura y guardar JPG + CSV"]
+    E --> F["Copiar respaldo previo al postproceso"]
+    F --> G["Lanzar autoframe en segundo plano"]
+    G --> H["Detectar rostro y registrar decisión"]
+    H --> I["Reemplazar JPG final reencuadrado"]
+    E --> J["Actualizar roster y continuar"]
+    J --> D
 ```
 
 ## Arquitectura
@@ -43,22 +45,25 @@ flowchart TB
     subgraph Core["Núcleo"]
         CORE["castel_credcam.py"]
         AUTO["photo_autoframe.py"]
-        DIAG["camera_diagnostic.py"]
+        DIAG["camera_diagnostic.py (independiente)"]
     end
 
     subgraph Data["Salida"]
         PHOTOS["fotos/<curso>/"]
         BACKUP["fotos_respaldo/<curso>/"]
-        LOGS["logs/"]
+        LOGS["logs/gui_*.log + autoframe_*.log"]
     end
 
     QT --> CORE
     TK --> CORE
-    CORE --> AUTO
-    CORE --> DIAG
+    QT --> AUTO
+    TK --> AUTO
     CORE --> PHOTOS
     CORE --> BACKUP
     CORE --> LOGS
+    AUTO --> PHOTOS
+    AUTO --> LOGS
+    DIAG -->|"Prueba aparte"| CAM["camera_diagnostic/"]
 ```
 
 ## Qué resuelve
@@ -66,19 +71,21 @@ flowchart TB
 1. Abre una cámara funcional y la negocia con el backend correcto.
 2. Trabaja con roster real del curso para avanzar sin perder el orden.
 3. Guarda fotos con nombres legibles y RUT cuando está disponible.
-4. Mantiene una copia espejo para recuperación rápida.
-5. Reencuadra la foto guardada para mejorar la composición final.
-6. Deja auditoría en CSV y logs para revisar qué pasó en la sesión.
+4. En las GUIs mantiene una copia previa al postproceso para recuperación rápida.
+5. En las GUIs reencuadra la foto guardada, priorizando rostros confirmados por ojos y evitando acercamientos a falsos positivos.
+6. Deja auditoría en CSV y logs, incluido el motivo técnico de cada autoframe.
 
 ## Componentes principales
 
 ### `castel_credcam.py`
 
-Flujo principal por consola. Sirve para:
+Flujo de captura por consola. Sirve para:
 
 - capturas rápidas.
-- diagnóstico de cámara.
-- sesiones livianas sin interfaz grande.
+- selección de cámara/backend y sesiones livianas sin interfaz grande.
+- generar `session_*.txt` al cerrar una sesión.
+
+No importa nóminas ni lanza `photo_autoframe.py`; guarda el frame capturado y su respaldo directamente.
 
 ### `GUI/castel_credcam_qt.py`
 
@@ -91,27 +98,31 @@ GUI principal recomendada para uso diario. Incluye:
 - tabla de progreso.
 - reintentos.
 - respaldo espejo por curso.
+- reencuadre postfoto asincrónico con log de diagnóstico.
 
 ### `GUI/castel_credcam_gui.py`
 
-Variante legacy mantenida por compatibilidad interna.
+Variante legacy mantenida por compatibilidad interna. También ejecuta el reencuadre postfoto y conserva auditoría de reintentos en `retakes.csv`.
 
 ### `photo_autoframe.py`
 
-Postproceso de recorte/reencuadre para centrar mejor el rostro después de guardar.
+Postproceso invocado por las GUIs después de guardar y respaldar la toma. Genera un log `autoframe_*.log` por ejecución.
 
 ### `camera_diagnostic.py`
 
-Ayuda a verificar cámaras, índices y backends antes de una jornada.
+Utilidad independiente que captura imágenes de diagnóstico para verificar cámaras, índices y backends antes de una jornada.
 
 ## Reencuadre automático
 
-La foto no depende solo de cómo se vea el preview. Después de guardar, el sistema vuelve a analizar la imagen y ajusta el encuadre para:
+En las interfaces Qt y Tk, la foto no depende solo de cómo se vea el preview. La GUI guarda la toma con sus ajustes activos, crea el respaldo y ejecuta `photo_autoframe.py` en segundo plano sobre el JPG principal. El postproceso:
 
-- centrar mejor la cara.
-- evitar demasiada pared vacía.
-- dejar un margen razonable para hombros y rostro.
-- conservar una copia cruda en el respaldo si hace falta revertir.
+- busca candidatos de rostro y prioriza los confirmados por ojos.
+- descarta candidatos bajos sin confirmación que suelen ser ropa o mobiliario.
+- reserva margen sobre la cara para no cortar cabello o cabeza.
+- usa un encuadre centrado conservador si no encuentra un rostro confiable.
+- escribe en `logs/autoframe_*.log` qué candidato eligió o descartó y qué caja final aplicó.
+
+El respaldo representa la imagen guardada por la GUI antes de este postproceso. Si el recorte tipo credencial ya estaba activo al capturar, ese ajuste ya forma parte del respaldo.
 
 ## Nomenclatura
 
@@ -141,7 +152,9 @@ CastelCredCam/
 |       `-- retakes.csv
 `-- logs/
     |-- gui_qt_YYYYMMDD_HHMMSS_PID.log
-    `-- cli_YYYYMMDD_HHMMSS_PID.log
+    |-- gui_YYYYMMDD_HHMMSS_PID.log
+    |-- cli_YYYYMMDD_HHMMSS_PID.log
+    `-- autoframe_YYYYMMDD_HHMMSS_PID.log
 ```
 
 ## Instalación
@@ -199,23 +212,28 @@ py .\camera_diagnostic.py
 
 ## Reintentos y respaldo
 
-Cuando una foto se rehace:
+El flujo de respaldo de las GUIs ocurre antes de ejecutar el postproceso. Si al guardar ya existe un respaldo con el mismo nombre, `ensure_photo_backup()` conserva la nueva copia usando el sufijo `__reintento_YYYYMMDD_HHMMSS`; en Qt, el botón de rehacer elimina primero el respaldo base.
 
-- la última captura puede eliminarse desde la GUI.
-- la copia anterior se conserva en el respaldo.
-- si ya existía el archivo, se guarda una variante con sufijo `__reintento_YYYYMMDD_HHMMSS`.
-- el respaldo escribe una entrada en `retakes.csv` con nota `reintento`.
+Al pulsar rehacer, la implementación actual difiere por interfaz:
+
+| Interfaz | Comportamiento actual de `Rehacer última` |
+| --- | --- |
+| Qt principal | elimina la foto vigente y su archivo de respaldo con el mismo nombre; actualiza el CSV. |
+| Tk legacy | elimina la foto vigente, mantiene los respaldos existentes y registra la acción en `retakes.csv`. |
+| Consola | al rehacer elimina el JPG vigente y registra `retakes.csv`; si luego se captura de nuevo el mismo nombre, su respaldo se reemplaza. |
 
 ## Mapa de módulos
 
 ```mermaid
 graph TD
-    A["castel_credcam.py"] --> B["Captura por consola"]
-    A --> C["Guardado + CSV + respaldo"]
-    A --> D["photo_autoframe.py"]
-    E["GUI/castel_credcam_qt.py"] --> A
-    F["GUI/castel_credcam_gui.py"] --> A
-    G["camera_diagnostic.py"] --> A
+    A["castel_credcam.py"] --> B["Funciones compartidas: CSV, respaldo, cámara, autoframe"]
+    A --> C["Captura por consola sin postproceso"]
+    D["GUI/castel_credcam_qt.py"] --> A
+    E["GUI/castel_credcam_gui.py"] --> A
+    D --> F["photo_autoframe.py"]
+    E --> F
+    F --> G["JPG final + logs/autoframe_*.log"]
+    H["camera_diagnostic.py"] --> I["Pruebas independientes de cámara"]
 ```
 
 ## Compatibilidad de cámara
