@@ -1807,6 +1807,21 @@ class CastelCredCamQt(QMainWindow):
 
         return output
 
+    def _source_backup_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Return the camera source with only user orientation settings, before any portrait crop."""
+        backup_frame = frame.copy()
+        if self.mirror_check.isChecked():
+            backup_frame = cv2.flip(backup_frame, 1)
+        return _rotate_frame(backup_frame, self.rotation_combo.currentText())
+
+    def _next_backup_path(self, backup_path: Path) -> Path:
+        """Avoid overwriting older source backups when a student is photographed again."""
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        if not backup_path.exists():
+            return backup_path
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return backup_path.with_name(f"{backup_path.stem}__reintento_{stamp}{backup_path.suffix}")
+
     def _compute_portrait_crop_box(
         self,
         width: int,
@@ -1838,6 +1853,8 @@ class CastelCredCamQt(QMainWindow):
                 y1 = int(eye_y - crop_h * 0.24)
             else:
                 y1 = int(face_cy - crop_h * 0.30)
+            # Haar commonly starts inside the hairline; always reserve visible headroom.
+            y1 = min(y1, int(fy - fh * 0.30))
         else:
             crop_h = int(max_crop_h * 0.82)
             crop_h = max(CROP_MIN_HEIGHT, crop_h)
@@ -2195,14 +2212,29 @@ class CastelCredCamQt(QMainWindow):
 
         detection_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         detection_gray = cv2.equalizeHist(detection_gray)
-        best_face: Optional[tuple[int, int, int, int]] = None
-        best_eyes: list[tuple[int, int]] = []
-        best_score = -1.0
+        evaluated_candidates: list[tuple[tuple[int, int, int, int], list[tuple[int, int]]]] = []
         for box in candidates:
             x, y, w, h = self._clip_box(box, width, height)
             if w < 36 or h < 36:
                 continue
             eyes = self._detect_eyes_in_face(detection_gray, (x, y, w, h))
+            evaluated_candidates.append(((x, y, w, h), eyes))
+
+        verified = [candidate for candidate in evaluated_candidates if len(candidate[1]) >= 2]
+        if verified:
+            selection_pool = verified
+        else:
+            # Avoid anchoring the portrait to a large false positive on clothing or furniture.
+            selection_pool = [
+                candidate
+                for candidate in evaluated_candidates
+                if candidate[0][1] + candidate[0][3] / 2 <= height * 0.62
+            ]
+
+        best_face: Optional[tuple[int, int, int, int]] = None
+        best_eyes: list[tuple[int, int]] = []
+        best_score = -1.0
+        for (x, y, w, h), eyes in selection_pool:
             score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
             if update_state and self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
                 prev_x, prev_y, prev_w, prev_h = self.current_face_box
@@ -2426,6 +2458,7 @@ class CastelCredCamQt(QMainWindow):
             self.session.roster_index = roster_index
 
         self.frame_counter += 1
+        source_backup = self._source_backup_frame(frame)
         transformed = self._apply_settings_to_frame(frame, for_preview=False)
         record = PhotoRecord(
             id=self.session.next_id,
@@ -2438,13 +2471,15 @@ class CastelCredCamQt(QMainWindow):
 
         image_path = self.session.session_dir / record.filename
         backup_path = self.session.backup_dir / record.filename
+        source_backup_path = self._next_backup_path(backup_path)
         try:
             if not cv2.imwrite(str(image_path), transformed):
                 raise RuntimeError(f"No se pudo guardar la foto en {image_path}")
+            if not cv2.imwrite(str(source_backup_path), source_backup):
+                raise RuntimeError(f"No se pudo guardar el respaldo fuente en {source_backup_path}")
             append_csv_record(self.session.csv_path, record)
-            ensure_photo_backup(image_path, backup_path)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
-            self._launch_photo_autoframe(image_path, backup_path)
+            self._launch_photo_autoframe(image_path, source_backup_path)
         except Exception as exc:
             self.logger.exception("Failed to save capture: %s", exc)
             QMessageBox.critical(self, "Error al guardar", f"No se pudo guardar la captura:\n{exc}")

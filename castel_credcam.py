@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import itertools
 import logging
 import json
 import os
@@ -13,6 +14,7 @@ import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -47,14 +49,21 @@ TEXT_THICKNESS = 1
 TEXT_LINE = 21
 AUTOFRAME_TARGET_SIZE = (1500, 2000)
 AUTOFRAME_MAX_DETECT_WIDTH = 1280
+AUTOFRAME_FAST_DETECT_WIDTH = 720
 AUTOFRAME_MIN_FACE_SIZE = 36
 AUTOFRAME_MIN_EYE_W = 12
 AUTOFRAME_MIN_EYE_H = 8
 AUTOFRAME_FACE_EXPANSION = 1.85
 AUTOFRAME_FACE_HEIGHT_RATIO = 0.60
 AUTOFRAME_EYE_TOP_RATIO = 0.24
+AUTOFRAME_HEADROOM_RATIO = 0.42
 AUTOFRAME_CHEST_MARGIN_RATIO = 0.10
 AUTOFRAME_FALLBACK_HEIGHT_RATIO = 0.82
+AUTOFRAME_MIN_EYE_SEPARATION_RATIO = 0.18
+AUTOFRAME_MAX_EYE_SEPARATION_RATIO = 0.68
+AUTOFRAME_MAX_EYE_LEVEL_DELTA_RATIO = 0.14
+AUTOFRAME_MAX_UNIQUE_CANDIDATES = 12
+AUTOFRAME_FAST_MAX_UNIQUE_CANDIDATES = 6
 PREFERRED_CAMERA_RESOLUTIONS = [
     (1280, 720),
     (1920, 1080),
@@ -645,13 +654,15 @@ def frame_looks_usable(frame) -> bool:
     return True
 
 
-def _autoframe_face_cascades() -> list[cv2.CascadeClassifier]:
-    return [
+@lru_cache(maxsize=1)
+def _autoframe_face_cascades() -> tuple[cv2.CascadeClassifier, ...]:
+    """Reuse face classifiers while postprocessing a photo batch."""
+    return (
         cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
         cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml"),
         cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt.xml"),
         cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml"),
-    ]
+    )
 
 
 def _autoframe_score_face(
@@ -675,17 +686,23 @@ def _autoframe_score_face(
     return area * max(0.2, center_bias) * aspect_penalty * eye_bonus * size_bonus
 
 
+@lru_cache(maxsize=1)
+def _autoframe_eye_cascades() -> tuple[cv2.CascadeClassifier, ...]:
+    """Reuse eye classifiers while one postprocess job evaluates candidates."""
+    return (
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"),
+        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml"),
+    )
+
+
 def _autoframe_detect_eyes(gray: np.ndarray, face_box: tuple[int, int, int, int]) -> list[tuple[int, int]]:
     x, y, w, h = face_box
     roi = gray[y : y + h, x : x + w]
     if roi.size == 0:
         return []
 
-    eye_centers: list[tuple[int, int]] = []
-    for cascade in (
-        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"),
-        cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml"),
-    ):
+    detected_eyes: list[tuple[int, int, int, int]] = []
+    for cascade in _autoframe_eye_cascades():
         if cascade.empty():
             continue
         eyes = cascade.detectMultiScale(
@@ -695,44 +712,97 @@ def _autoframe_detect_eyes(gray: np.ndarray, face_box: tuple[int, int, int, int]
             minSize=(max(AUTOFRAME_MIN_EYE_W, w // 12), max(AUTOFRAME_MIN_EYE_H, h // 14)),
         )
         for ex, ey, ew, eh in eyes:
-            eye_centers.append((x + ex + ew // 2, y + ey + eh // 2))
-        if len(eye_centers) >= 2:
-            break
+            detected_eyes.append((int(x + ex + ew // 2), int(y + ey + eh // 2), int(ew), int(eh)))
 
-    eye_centers.sort(key=lambda pt: pt[0])
-    unique: list[tuple[int, int]] = []
-    for pt in eye_centers:
-        if not unique or abs(unique[-1][0] - pt[0]) > 12 or abs(unique[-1][1] - pt[1]) > 12:
-            unique.append(pt)
-        if len(unique) >= 2:
-            break
+    unique: list[tuple[int, int, int, int]] = []
+    for candidate in sorted(detected_eyes, key=lambda pt: (pt[0], pt[1], -pt[2])):
+        if not any(abs(existing[0] - candidate[0]) <= 12 and abs(existing[1] - candidate[1]) <= 12 for existing in unique):
+            unique.append(candidate)
+
+    valid_pairs: list[tuple[float, tuple[int, int], tuple[int, int]]] = []
+    for left, right in itertools.combinations(unique, 2):
+        first, second = sorted((left, right), key=lambda pt: pt[0])
+        separation_ratio = (second[0] - first[0]) / max(1, w)
+        level_delta_ratio = abs(second[1] - first[1]) / max(1, h)
+        eye_line_ratio = (((first[1] + second[1]) / 2) - y) / max(1, h)
+        if not AUTOFRAME_MIN_EYE_SEPARATION_RATIO <= separation_ratio <= AUTOFRAME_MAX_EYE_SEPARATION_RATIO:
+            continue
+        if level_delta_ratio > AUTOFRAME_MAX_EYE_LEVEL_DELTA_RATIO:
+            continue
+        if not 0.18 <= eye_line_ratio <= 0.62:
+            continue
+        pair_score = level_delta_ratio + abs(eye_line_ratio - 0.40) * 0.30
+        valid_pairs.append((pair_score, (first[0], first[1]), (second[0], second[1])))
+
+    if not valid_pairs:
+        return []
+    _score, left_eye, right_eye = min(valid_pairs, key=lambda pair: pair[0])
+    return [left_eye, right_eye]
+
+
+def _autoframe_box_iou(left: tuple[int, int, int, int], right: tuple[int, int, int, int]) -> float:
+    """Measure overlap to collapse repeated Haar detections of one region."""
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    ix1 = max(lx, rx)
+    iy1 = max(ly, ry)
+    ix2 = min(lx + lw, rx + rw)
+    iy2 = min(ly + lh, ry + rh)
+    intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    if intersection <= 0:
+        return 0.0
+    union = lw * lh + rw * rh - intersection
+    return intersection / max(1, union)
+
+
+def _autoframe_unique_candidates(
+    candidates: list[tuple[int, int, int, int]],
+    width: int,
+    height: int,
+) -> list[tuple[int, int, int, int]]:
+    """Keep distinct face hypotheses ordered by their initial relevance."""
+    clipped: list[tuple[int, int, int, int]] = []
+    for x, y, w, h in candidates:
+        x = max(0, min(x, width - 1))
+        y = max(0, min(y, height - 1))
+        w = max(1, min(w, width - x))
+        h = max(1, min(h, height - y))
+        clipped.append((x, y, w, h))
+
+    unique: list[tuple[int, int, int, int]] = []
+    for candidate in sorted(clipped, key=lambda box: _autoframe_score_face(box, width, height), reverse=True):
+        if any(_autoframe_box_iou(candidate, selected) >= 0.48 for selected in unique):
+            continue
+        unique.append(candidate)
     return unique
 
 
-def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, int]]:
-    if frame.size == 0:
-        return None
-
+def _autoframe_collect_candidates(
+    frame: np.ndarray,
+    max_detect_width: int,
+    cascades: tuple[cv2.CascadeClassifier, ...],
+    profiles: tuple[tuple[float, int, tuple[int, int]], ...],
+    include_mirror: bool,
+) -> list[tuple[int, int, int, int]]:
+    """Detect possible faces for either the cheap first pass or exhaustive fallback."""
     height, width = frame.shape[:2]
     detect_frame = frame
     scale = 1.0
-    if width > AUTOFRAME_MAX_DETECT_WIDTH:
-        scale = AUTOFRAME_MAX_DETECT_WIDTH / width
-        detect_frame = cv2.resize(frame, (AUTOFRAME_MAX_DETECT_WIDTH, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+    if width > max_detect_width:
+        scale = max_detect_width / width
+        detect_frame = cv2.resize(frame, (max_detect_width, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
 
-    gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
+    gray = cv2.equalizeHist(cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY))
+    search_frames = [(gray, False)]
+    if include_mirror:
+        search_frames.append((cv2.flip(gray, 1), True))
 
     candidates: list[tuple[int, int, int, int]] = []
-    for cascade in _autoframe_face_cascades():
+    for cascade in cascades:
         if cascade.empty():
             continue
-        for search_frame, mirrored in ((gray, False), (cv2.flip(gray, 1), True)):
-            for scale_factor, min_neighbors, min_size in (
-                (1.03, 3, (28, 28)),
-                (1.05, 4, (36, 36)),
-                (1.08, 5, (52, 52)),
-            ):
+        for search_frame, mirrored in search_frames:
+            for scale_factor, min_neighbors, min_size in profiles:
                 faces = cascade.detectMultiScale(
                     search_frame,
                     scaleFactor=scale_factor,
@@ -748,17 +818,113 @@ def _autoframe_detect_face(frame: np.ndarray) -> Optional[tuple[int, int, int, i
                         fw = int(fw / scale)
                         fh = int(fh / scale)
                     candidates.append((fx, fy, fw, fh))
+    return candidates
 
+
+def _autoframe_select_verified_face(
+    frame: np.ndarray,
+    candidates: list[tuple[int, int, int, int]],
+    diagnostic_logger: Optional[logging.Logger],
+    phase: str,
+    max_candidates: int,
+) -> Optional[tuple[int, int, int, int]]:
+    """Return only a face backed by a plausible two-eye detection."""
+    height, width = frame.shape[:2]
     if not candidates:
+        if diagnostic_logger is not None:
+            diagnostic_logger.info("Autoframe phase=%s: candidatos=0.", phase)
         return None
 
-    best = max(candidates, key=lambda box: _autoframe_score_face(box, width, height))
-    x, y, w, h = best
-    x = max(0, min(x, width - 1))
-    y = max(0, min(y, height - 1))
-    w = max(1, min(w, width - x))
-    h = max(1, min(h, height - y))
+    detection_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    unique_candidates = _autoframe_unique_candidates(candidates, width, height)
+    candidates_to_verify = unique_candidates[:max_candidates]
+    evaluated = [(candidate, _autoframe_detect_eyes(detection_gray, candidate)) for candidate in candidates_to_verify]
+    verified = [candidate for candidate in evaluated if len(candidate[1]) >= 2]
+    if diagnostic_logger is not None:
+        diagnostic_logger.info(
+            "Autoframe phase=%s: crudos=%s unicos=%s evaluados=%s confirmados_por_ojos=%s.",
+            phase,
+            len(candidates),
+            len(unique_candidates),
+            len(candidates_to_verify),
+            len(verified),
+        )
+    if not verified:
+        return None
+
+    (x, y, w, h), eyes = max(
+        verified,
+        key=lambda candidate: _autoframe_score_face(candidate[0], width, height, len(candidate[1])),
+    )
+    raw_best_box, raw_best_eyes = max(
+        evaluated,
+        key=lambda candidate: _autoframe_score_face(candidate[0], width, height, len(candidate[1])),
+    )
+    if diagnostic_logger is not None and raw_best_box != (x, y, w, h):
+        diagnostic_logger.info(
+            "Autoframe rejection: fase=%s candidato_mayor=%s ojos=%s descartado_por=no_confirmar_ojos; elegido=%s.",
+            phase,
+            raw_best_box,
+            len(raw_best_eyes),
+            (x, y, w, h),
+        )
+    if diagnostic_logger is not None:
+        diagnostic_logger.info(
+            "Autoframe decision: fase=%s rostro=%s motivo=ojos_confirmados ojos=%s score=%.1f.",
+            phase,
+            (x, y, w, h),
+            len(eyes),
+            _autoframe_score_face((x, y, w, h), width, height, len(eyes)),
+        )
     return x, y, w, h
+
+
+def _autoframe_detect_face(
+    frame: np.ndarray,
+    diagnostic_logger: Optional[logging.Logger] = None,
+) -> Optional[tuple[int, int, int, int]]:
+    if frame.size == 0:
+        if diagnostic_logger is not None:
+            diagnostic_logger.warning("Autoframe decision: frame vacio, se omite deteccion.")
+        return None
+
+    cascades = _autoframe_face_cascades()
+    fast_candidates = _autoframe_collect_candidates(
+        frame,
+        AUTOFRAME_FAST_DETECT_WIDTH,
+        cascades[:3],
+        ((1.06, 4, (30, 30)),),
+        include_mirror=False,
+    )
+    face_box = _autoframe_select_verified_face(
+        frame,
+        fast_candidates,
+        diagnostic_logger,
+        "rapida",
+        AUTOFRAME_FAST_MAX_UNIQUE_CANDIDATES,
+    )
+    if face_box is not None:
+        return face_box
+
+    fallback_candidates = _autoframe_collect_candidates(
+        frame,
+        AUTOFRAME_MAX_DETECT_WIDTH,
+        cascades,
+        ((1.03, 3, (28, 28)), (1.05, 4, (36, 36)), (1.08, 5, (52, 52))),
+        include_mirror=True,
+    )
+    face_box = _autoframe_select_verified_face(
+        frame,
+        fallback_candidates,
+        diagnostic_logger,
+        "exhaustiva",
+        AUTOFRAME_MAX_UNIQUE_CANDIDATES,
+    )
+    if face_box is None and diagnostic_logger is not None:
+        diagnostic_logger.warning(
+            "Autoframe decision: ningun pase confirmo un rostro; se preservara la imagen sin recorte adicional."
+        )
+    return face_box
 
 
 def _autoframe_build_crop_box(
@@ -802,6 +968,9 @@ def _autoframe_build_crop_box(
         else:
             y1 = int(face_cy - crop_h * 0.30)
 
+        # Haar commonly starts inside the hairline; always reserve visible headroom.
+        headroom_y1 = int(fy - fh * AUTOFRAME_HEADROOM_RATIO)
+        y1 = min(y1, headroom_y1)
         chest_margin = max(18, int(fh * AUTOFRAME_CHEST_MARGIN_RATIO))
         y1 = min(y1, height - crop_h + chest_margin)
         x1 = min(x1, width - crop_w + max(12, int(fw * 0.18)))
@@ -814,7 +983,7 @@ def _autoframe_build_crop_box(
         for dx in search_offsets:
             for dy in (-0.08, 0.0, 0.08):
                 cand_x1 = int(face_cx - crop_w / 2 + crop_w * dx)
-                cand_y1 = int(y1 + crop_h * dy)
+                cand_y1 = min(int(y1 + crop_h * dy), headroom_y1)
                 cand_x1 = max(0, min(cand_x1, width - crop_w))
                 cand_y1 = max(0, min(cand_y1, height - crop_h))
                 cand_box = (cand_x1, cand_y1, cand_x1 + crop_w, cand_y1 + crop_h)
@@ -856,31 +1025,72 @@ def _autoframe_crop_frame(frame: np.ndarray, crop_box: tuple[int, int, int, int]
     return cv2.resize(crop, output_size, interpolation=interpolation)
 
 
-def autoframe_photo_file(image_path: Path, backup_path: Optional[Path] = None) -> tuple[bool, str]:
+def autoframe_photo_file(
+    image_path: Path,
+    backup_path: Optional[Path] = None,
+    diagnostic_logger: Optional[logging.Logger] = None,
+) -> tuple[bool, str]:
     try:
         image = cv2.imread(str(image_path))
         if image is None:
+            if diagnostic_logger is not None:
+                diagnostic_logger.error("Autoframe error: no se pudo leer %s.", image_path)
             return False, f"No se pudo leer {image_path}"
 
+        if diagnostic_logger is not None:
+            diagnostic_logger.info(
+                "Autoframe input: archivo=%s dimensiones=%sx%s backup=%s.",
+                image_path,
+                image.shape[1],
+                image.shape[0],
+                backup_path or "-",
+            )
         if backup_path is not None and not backup_path.exists():
             backup_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(image_path, backup_path)
+            if diagnostic_logger is not None:
+                diagnostic_logger.info("Autoframe backup: creado %s.", backup_path)
 
-        face_box = _autoframe_detect_face(image)
+        face_box = _autoframe_detect_face(image, diagnostic_logger)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         eye_centers = _autoframe_detect_eyes(gray, face_box) if face_box is not None else []
+        if face_box is None or len(eye_centers) < 2:
+            if diagnostic_logger is not None:
+                diagnostic_logger.warning(
+                    "Autoframe guard: imagen preservada sin cambios; no hay rostro con par de ojos confiable. rostro=%s ojos=%s.",
+                    face_box or "-",
+                    eye_centers or "-",
+                )
+            return True, f"Sin reencuadre para {image_path.name}: rostro no confirmado"
         crop_box = _autoframe_build_crop_box(image.shape[1], image.shape[0], face_box, eye_centers)
+        if diagnostic_logger is not None:
+            diagnostic_logger.info(
+                "Autoframe crop: caja=%s salida=%s motivo=%s rostro=%s ojos=%s.",
+                crop_box,
+                AUTOFRAME_TARGET_SIZE,
+                "rostro_con_margen_superior_y_par_de_ojos_validado",
+                face_box or "-",
+                eye_centers or "-",
+            )
         framed = _autoframe_crop_frame(image, crop_box)
         if framed.size == 0:
+            if diagnostic_logger is not None:
+                diagnostic_logger.error("Autoframe error: crop vacio para %s.", image_path.name)
             return False, f"Crop vacio para {image_path.name}"
 
         tmp_main = image_path.with_name(f"{image_path.stem}.__autoframe_tmp{image_path.suffix}")
         if not cv2.imwrite(str(tmp_main), framed):
+            if diagnostic_logger is not None:
+                diagnostic_logger.error("Autoframe error: no se pudo escribir %s.", tmp_main)
             return False, f"No se pudo escribir temporal {tmp_main.name}"
         tmp_main.replace(image_path)
 
+        if diagnostic_logger is not None:
+            diagnostic_logger.info("Autoframe result: reencuadre aplicado a %s.", image_path.name)
         return True, f"Reencuadre aplicado a {image_path.name}"
     except Exception as exc:
+        if diagnostic_logger is not None:
+            diagnostic_logger.exception("Autoframe exception: %s.", exc)
         return False, f"Error de reencuadre en {image_path.name}: {exc}"
 
 
