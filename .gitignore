@@ -23,5 +23,6 @@ Thumbs.db
 Desktop.ini
 *.log
 logs/
+auditoria_fotos/
 last_camera.json
 camera_resolution.json

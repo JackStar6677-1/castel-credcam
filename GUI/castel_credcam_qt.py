@@ -1807,6 +1807,21 @@ class CastelCredCamQt(QMainWindow):
 
         return output
 
+    def _source_backup_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Return the camera source with only user orientation settings, before any portrait crop."""
+        backup_frame = frame.copy()
+        if self.mirror_check.isChecked():
+            backup_frame = cv2.flip(backup_frame, 1)
+        return _rotate_frame(backup_frame, self.rotation_combo.currentText())
+
+    def _next_backup_path(self, backup_path: Path) -> Path:
+        """Avoid overwriting older source backups when a student is photographed again."""
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        if not backup_path.exists():
+            return backup_path
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return backup_path.with_name(f"{backup_path.stem}__reintento_{stamp}{backup_path.suffix}")
+
     def _compute_portrait_crop_box(
         self,
         width: int,
@@ -2443,6 +2458,7 @@ class CastelCredCamQt(QMainWindow):
             self.session.roster_index = roster_index
 
         self.frame_counter += 1
+        source_backup = self._source_backup_frame(frame)
         transformed = self._apply_settings_to_frame(frame, for_preview=False)
         record = PhotoRecord(
             id=self.session.next_id,
@@ -2455,13 +2471,15 @@ class CastelCredCamQt(QMainWindow):
 
         image_path = self.session.session_dir / record.filename
         backup_path = self.session.backup_dir / record.filename
+        source_backup_path = self._next_backup_path(backup_path)
         try:
             if not cv2.imwrite(str(image_path), transformed):
                 raise RuntimeError(f"No se pudo guardar la foto en {image_path}")
+            if not cv2.imwrite(str(source_backup_path), source_backup):
+                raise RuntimeError(f"No se pudo guardar el respaldo fuente en {source_backup_path}")
             append_csv_record(self.session.csv_path, record)
-            ensure_photo_backup(image_path, backup_path)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
-            self._launch_photo_autoframe(image_path, backup_path)
+            self._launch_photo_autoframe(image_path, source_backup_path)
         except Exception as exc:
             self.logger.exception("Failed to save capture: %s", exc)
             QMessageBox.critical(self, "Error al guardar", f"No se pudo guardar la captura:\n{exc}")

@@ -182,6 +182,7 @@ class CastelCredCamGUI:
         self.capture: Optional[cv2.VideoCapture] = None
         self.preview_job: Optional[str] = None
         self.current_frame = None
+        self.current_source_frame = None
         self.tk_image = None
         self.session: Optional[GuiSession] = None
         self.autoframe_jobs: dict[Path, threading.Thread] = {}
@@ -1413,6 +1414,7 @@ class CastelCredCamGUI:
         if self.mirror_var.get():
             frame = cv2.flip(frame, 1)
         transformed = self._apply_transformations(frame)
+        self.current_source_frame = transformed.copy()
         self.frame_counter += 1
         self.current_face_box = self._detect_primary_face(transformed)
         if self.crop_portrait_var.get():
@@ -1770,6 +1772,14 @@ class CastelCredCamGUI:
         interpolation = cv2.INTER_AREA if target_w < crop_w or target_h < crop_h else cv2.INTER_CUBIC
         return cv2.resize(crop, output_size, interpolation=interpolation)
 
+    def _next_backup_path(self, backup_path: Path) -> Path:
+        """Avoid overwriting older source backups when a student is photographed again."""
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        if not backup_path.exists():
+            return backup_path
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return backup_path.with_name(f"{backup_path.stem}__reintento_{stamp}{backup_path.suffix}")
+
     def _constrain_crop_box(
         self,
         crop_box: tuple[int, int, int, int],
@@ -2026,6 +2036,7 @@ class CastelCredCamGUI:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         image_path = self.session.session_dir / filename
         backup_path = self.session.backup_dir / filename
+        source_backup_path = self._next_backup_path(backup_path)
 
         if not cv2.imwrite(str(image_path), self.current_frame.copy()):
             self.logger.error("Image save failed: %s", image_path)
@@ -2043,9 +2054,11 @@ class CastelCredCamGUI:
         append_csv_record(self.session.csv_path, record)
         backup_status = "respaldo OK"
         try:
-            ensure_photo_backup(image_path, backup_path)
+            source_frame = self.current_source_frame.copy() if self.current_source_frame is not None else self.current_frame.copy()
+            if not cv2.imwrite(str(source_backup_path), source_frame):
+                raise RuntimeError(f"No se pudo guardar el respaldo fuente en {source_backup_path}")
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
-            self._launch_photo_autoframe(image_path, backup_path)
+            self._launch_photo_autoframe(image_path, source_backup_path)
         except Exception as exc:
             self.logger.exception("Backup copy failed for %s: %s", filename, exc)
             backup_status = f"respaldo parcial: {exc}"

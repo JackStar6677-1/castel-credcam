@@ -50,7 +50,7 @@ CastelCredCam/
 Reglas clave:
 
 - la carpeta principal del curso vive en `fotos/<curso>/`
-- el respaldo espejo vive en `fotos_respaldo/<curso>/`
+- el respaldo fuente vive en `fotos_respaldo/<curso>/` y conserva la toma completa sin recorte de credencial
 - cada captura actualiza el `index.csv`
 - cada arranque genera un log nuevo
 
@@ -167,13 +167,13 @@ Revisar:
 
 ## Recuperacion manual
 
-Si alguien borra una foto por error:
+Si alguien borra una foto por error o el recorte automatico corta mal una cara:
 
 - buscar en `fotos_respaldo/<curso>/`
-- copiar el archivo de vuelta a `fotos/<curso>/`
+- copiar el archivo de vuelta a `fotos/<curso>/` o recortarlo manualmente desde esa fuente completa
 - si hace falta, reconstruir el `index.csv` a partir del respaldo
 
-Por eso el proyecto guarda la copia espejo: para que una perdida accidental no implique rehacer toda la jornada.
+Por eso el proyecto guarda la copia fuente: para que una perdida accidental o un recorte fallido no implique rehacer toda la jornada.
 
 ## Modo prueba vs modo curso
 

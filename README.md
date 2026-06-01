@@ -24,8 +24,8 @@ flowchart LR
     A["Abrir GUI Qt o Tk"] --> B["Cargar nómina (opcional)"]
     B --> C["Seleccionar curso"]
     C --> D["Capturar alumno"]
-    D --> E["Aplicar ajustes de captura y guardar JPG + CSV"]
-    E --> F["Copiar respaldo previo al postproceso"]
+    D --> E["Guardar JPG final + CSV"]
+    E --> F["Guardar fuente completa sin recorte en fotos_respaldo"]
     F --> G["Lanzar autoframe en segundo plano"]
     G --> H["Detectar rostro y registrar decisión"]
     H --> I["Reemplazar JPG final reencuadrado"]
@@ -114,7 +114,7 @@ Utilidad independiente que captura imágenes de diagnóstico para verificar cám
 
 ## Reencuadre automático
 
-En las interfaces Qt y Tk, la foto no depende solo de cómo se vea el preview. La GUI guarda la toma con sus ajustes activos, crea el respaldo y ejecuta `photo_autoframe.py` en segundo plano sobre el JPG principal. El postproceso:
+En las interfaces Qt y Tk, la foto no depende solo de cómo se vea el preview. La GUI guarda el JPG principal con los ajustes activos, crea un respaldo de la fuente completa sin recorte de credencial y ejecuta `photo_autoframe.py` en segundo plano sobre el JPG principal. El postproceso:
 
 - busca candidatos de rostro y solo reemplaza la foto si confirma un par de ojos con separación y altura plausibles.
 - descarta candidatos bajos sin confirmación que suelen ser ropa o mobiliario.
@@ -122,7 +122,7 @@ En las interfaces Qt y Tk, la foto no depende solo de cómo se vea el preview. L
 - conserva la imagen guardada sin aplicar un segundo recorte si no encuentra un rostro confiable.
 - escribe en `logs/autoframe_*.log` qué candidato eligió o descartó y qué caja final aplicó.
 
-El respaldo representa la imagen guardada por la GUI antes de este postproceso. Si el recorte tipo credencial ya estaba activo al capturar, ese ajuste ya forma parte del respaldo.
+El respaldo de `fotos_respaldo/<curso>/` conserva el frame fuente con espejo/rotación aplicados, pero sin el recorte tipo credencial ni el segundo recorte de `photo_autoframe.py`. Eso permite recuperar material real cuando el encuadre automático corta una cara o se va al fondo.
 
 ## Nomenclatura
 
@@ -212,7 +212,7 @@ py .\camera_diagnostic.py
 
 ## Reintentos y respaldo
 
-El flujo de respaldo de las GUIs ocurre antes de ejecutar el postproceso. Si al guardar ya existe un respaldo con el mismo nombre, `ensure_photo_backup()` conserva la nueva copia usando el sufijo `__reintento_YYYYMMDD_HHMMSS`; en Qt, el botón de rehacer elimina primero el respaldo base.
+El flujo de respaldo de las GUIs ocurre antes de ejecutar el postproceso y guarda la fuente completa sin recorte de credencial. Si al guardar ya existe un respaldo con el mismo nombre, la nueva copia usa el sufijo `__reintento_YYYYMMDD_HHMMSS`; en Qt, el botón de rehacer elimina primero el respaldo base.
 
 Al pulsar rehacer, la implementación actual difiere por interfaz:
 
