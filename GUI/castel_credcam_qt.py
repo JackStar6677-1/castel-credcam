@@ -576,13 +576,36 @@ class CastelCredCamQt(QMainWindow):
                 border: none;
                 border-radius: 8px;
             }}
-            QHeaderView::section {{
+            QHeaderView::section {
                 background: #24222C;
                 color: {ACCENT_GOLD};
                 padding: 8px;
                 border: none;
                 font-weight: 700;
-            }}
+            }
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+            }
+            QTabBar::tab {
+                background: #23222A;
+                color: #C7C1CF;
+                border: 1px solid #383545;
+                border-bottom: none;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                padding: 10px 18px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background: #6A4A98;
+                color: #F2EEF7;
+                border-color: #6A4A98;
+            }
+            QTabBar::tab:hover {
+                background: #352C43;
+                color: #F2EEF7;
+            }
         """
 
     def _build_ui(self) -> None:
@@ -663,7 +686,7 @@ class CastelCredCamQt(QMainWindow):
         self.start_button = QPushButton("Iniciar sesion")
         self.start_button.clicked.connect(self.start_session)
         session_layout.addWidget(self.start_button)
-        sidebar_layout.addWidget(self.session_card)
+
 
         self.roster_card = self._make_card()
         roster_layout = QVBoxLayout(self.roster_card)
@@ -689,7 +712,7 @@ class CastelCredCamQt(QMainWindow):
         self.align_button = QPushButton("Alinear con lista")
         self.align_button.clicked.connect(self.sync_student_with_roster)
         roster_layout.addWidget(self.align_button)
-        sidebar_layout.addWidget(self.roster_card)
+
 
         self.camera_card = self._make_card()
         camera_layout = QVBoxLayout(self.camera_card)
@@ -785,7 +808,7 @@ class CastelCredCamQt(QMainWindow):
         self.next_camera_button.clicked.connect(self.next_camera)
         camera_layout.addWidget(self.prev_camera_button)
         camera_layout.addWidget(self.next_camera_button)
-        sidebar_layout.addWidget(self.camera_card)
+
 
         self.capture_card = self._make_card()
         capture_layout = QVBoxLayout(self.capture_card)
@@ -818,8 +841,7 @@ class CastelCredCamQt(QMainWindow):
         self.close_session_button.clicked.connect(self.close_session)
         btn_row2.addWidget(self.close_session_button)
         capture_layout.addLayout(btn_row2)
-        sidebar_layout.addWidget(self.capture_card)
-
+        # Definición de recientes e info cards antes de agruparlas en pestañas
         self.recent_card = self._make_card()
         recent_layout = QVBoxLayout(self.recent_card)
         recent_layout.setContentsMargins(14, 14, 14, 14)
@@ -829,8 +851,6 @@ class CastelCredCamQt(QMainWindow):
         self.recent_text.setReadOnly(True)
         self.recent_text.setMaximumHeight(120)
         recent_layout.addWidget(self.recent_text)
-        sidebar_layout.addWidget(self.recent_card)
-        sidebar_layout.addStretch(1)
 
         self.info_card = self._make_card()
         info_layout = QVBoxLayout(self.info_card)
@@ -841,7 +861,36 @@ class CastelCredCamQt(QMainWindow):
         self.info_text.setReadOnly(True)
         self.info_text.setMaximumHeight(112)
         info_layout.addWidget(self.info_text)
-        sidebar_layout.addWidget(self.info_card)
+
+        # Crear el Tab Widget para la barra lateral
+        self.sidebar_tabs = QTabWidget()
+        self.sidebar_tabs.setObjectName("SidebarTabs")
+
+        # Pestaña 1: Capturar (Controles de flujo diario)
+        self.tab_capture = QWidget()
+        self.tab_capture_layout = QVBoxLayout(self.tab_capture)
+        self.tab_capture_layout.setContentsMargins(0, 8, 0, 8)
+        self.tab_capture_layout.setSpacing(12)
+        self.tab_capture_layout.addWidget(self.roster_card)
+        self.tab_capture_layout.addWidget(self.capture_card)
+        self.tab_capture_layout.addWidget(self.recent_card)
+        self.tab_capture_layout.addStretch(1)
+
+        # Pestaña 2: Ajustes (Configuraciones de hardware e inicio)
+        self.tab_settings = QWidget()
+        self.tab_settings_layout = QVBoxLayout(self.tab_settings)
+        self.tab_settings_layout.setContentsMargins(0, 8, 0, 8)
+        self.tab_settings_layout.setSpacing(12)
+        self.tab_settings_layout.addWidget(self.session_card)
+        self.tab_settings_layout.addWidget(self.camera_card)
+        self.tab_settings_layout.addWidget(self.info_card)
+        self.tab_settings_layout.addStretch(1)
+
+        self.sidebar_tabs.addTab(self.tab_capture, "Capturar")
+        self.sidebar_tabs.addTab(self.tab_settings, "Configuración")
+
+        # Añadir el Tab Widget a la barra lateral principal
+        sidebar_layout.addWidget(self.sidebar_tabs)
 
         self.main_splitter = QSplitter(Qt.Orientation.Vertical)
         self.main_splitter.setChildrenCollapsible(False)
