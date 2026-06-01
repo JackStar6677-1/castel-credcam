@@ -1618,6 +1618,19 @@ class CastelCredCamGUI:
             x, y, w, h = self._clip_box(box, width, height)
             if w < 36 or h < 36:
                 continue
+
+            cx = x + w / 2
+            cy = y + h / 2
+            # 1. Filtro de tamaño relativo (ancho de la cabeza entre 7% y 28% de la pantalla)
+            if w < width * 0.07 or w > width * 0.28:
+                continue
+            # 2. Filtro de centrado horizontal (el estudiante debe estar en el rango [30%, 70%] de la pantalla)
+            if cx < width * 0.30 or cx > width * 0.70:
+                continue
+            # 3. Filtro de centrado vertical (el rostro debe estar en la zona superior/media [15%, 65%] de la pantalla)
+            if cy < height * 0.15 or cy > height * 0.65:
+                continue
+
             eyes = self._detect_eyes_in_face(gray, (x, y, w, h))
             evaluated_candidates.append(((x, y, w, h), eyes))
 
