@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
     QHeaderView,
@@ -576,18 +577,18 @@ class CastelCredCamQt(QMainWindow):
                 border: none;
                 border-radius: 8px;
             }}
-            QHeaderView::section {
+            QHeaderView::section {{
                 background: #24222C;
                 color: {ACCENT_GOLD};
                 padding: 8px;
                 border: none;
                 font-weight: 700;
-            }
-            QTabWidget::pane {
+            }}
+            QTabWidget::pane {{
                 border: none;
                 background: transparent;
-            }
-            QTabBar::tab {
+            }}
+            QTabBar::tab {{
                 background: #23222A;
                 color: #C7C1CF;
                 border: 1px solid #383545;
@@ -596,16 +597,16 @@ class CastelCredCamQt(QMainWindow):
                 border-top-right-radius: 8px;
                 padding: 10px 18px;
                 font-weight: bold;
-            }
-            QTabBar::tab:selected {
+            }}
+            QTabBar::tab:selected {{
                 background: #6A4A98;
                 color: #F2EEF7;
                 border-color: #6A4A98;
-            }
-            QTabBar::tab:hover {
+            }}
+            QTabBar::tab:hover {{
                 background: #352C43;
                 color: #F2EEF7;
-            }
+            }}
         """
 
     def _build_ui(self) -> None:
