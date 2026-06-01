@@ -363,6 +363,7 @@ class CameraThread(QThread):
 
 class CastelCredCamQt(QMainWindow):
     autoframe_finished = Signal(bool, str)
+    post_progress_updated = Signal(int, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -426,6 +427,7 @@ class CastelCredCamQt(QMainWindow):
         self.post_progress_timer.setInterval(80)
         self.post_progress_timer.timeout.connect(self._on_post_progress_tick)
         self.autoframe_finished.connect(self._on_autoframe_finished)
+        self.post_progress_updated.connect(self._on_post_progress_updated)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
         self.preview_render_timer.setInterval(33)
@@ -2327,18 +2329,36 @@ class CastelCredCamQt(QMainWindow):
         
         # Obtener el frame de vista previa completo (rotado/volteado) sin recortar
         frame = self._render_preview_frame(frame_source)
+        height, width = frame.shape[:2]
+
+        # Calcular la caja de recorte para el preview basada en fallback centrado
+        target_ratio = 3 / 4
+        max_crop_h = min(height, int(width / target_ratio))
+        max_crop_w = int(max_crop_h * target_ratio)
+        crop_h = int(max_crop_h * 0.82)
+        crop_h = max(CROP_MIN_HEIGHT, crop_h)
+        crop_w = int(crop_h * target_ratio)
+        x1 = (width - crop_w) // 2
+        y1 = (height - crop_h) // 2
+        crop_box = (x1, y1, x1 + crop_w, y1 + crop_h)
+
+        # Aplicar el ajuste manual si existe
+        crop_box = self._apply_manual_crop_tuning(crop_box, width, height)
+
+        # Dibujar la caja de recorte (rectángulo azul/cian) si está activada
+        if self.crop_check.isChecked() and self.guide_check.isChecked():
+            cv2.rectangle(frame, (crop_box[0], crop_box[1]), (crop_box[2], crop_box[3]), (244, 201, 93), 2)
+            # Dibujar líneas del centro del recorte
+            cx = (crop_box[0] + crop_box[2]) // 2
+            cy_eye = crop_box[1] + int((crop_box[3] - crop_box[1]) * 0.38)
+            cv2.line(frame, (cx, crop_box[1]), (cx, crop_box[3]), (244, 201, 93), 1)
+            cv2.line(frame, (crop_box[0], cy_eye), (crop_box[2], cy_eye), (244, 201, 93), 1)
 
         # Dibujar la guía estática de encuadre si está activada
         if self.guide_check.isChecked():
             self._draw_guides(frame)
 
-        # Detectar y dibujar el anclaje de rostro en la vista previa si está activado
-        if self.face_check.isChecked():
-            face_box = self._detect_primary_face(frame, for_preview=True)
-            if face_box is not None:
-                self._draw_face_anchor(frame, crop_box=None, face_box=face_box)
-
-        if self.guide_check.isChecked() or self.face_check.isChecked():
+        if self.guide_check.isChecked():
             info_lines = self._preview_status_lines()
             self._draw_preview_banner(frame, info_lines, 0)
 
@@ -2521,7 +2541,6 @@ class CastelCredCamQt(QMainWindow):
 
         self.frame_counter += 1
         source_backup = self._source_backup_frame(frame)
-        transformed = self._apply_settings_to_frame(frame, for_preview=False)
         record = PhotoRecord(
             id=self.session.next_id,
             filename=build_photo_filename(student_name, self.session.course_display, rut),
@@ -2534,12 +2553,22 @@ class CastelCredCamQt(QMainWindow):
         image_path = self.session.session_dir / record.filename
         backup_path = self.session.backup_dir / record.filename
         try:
-            if not cv2.imwrite(str(image_path), transformed):
+            # Guardar la imagen original completa (orientada) tanto en la ruta principal como en el respaldo
+            if not cv2.imwrite(str(image_path), source_backup):
                 raise RuntimeError(f"No se pudo guardar la foto en {image_path}")
-            ensure_photo_backup(image_path, backup_path)
+            if not cv2.imwrite(str(backup_path), source_backup):
+                raise RuntimeError(f"No se pudo guardar el respaldo en {backup_path}")
             append_csv_record(self.session.csv_path, record)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
-            self._launch_photo_autoframe(image_path, backup_path)
+            self._launch_photo_autoframe(
+                image_path=image_path,
+                backup_path=backup_path,
+                dx=self.crop_manual_dx,
+                dy=self.crop_manual_dy,
+                zoom=self.crop_manual_zoom,
+                crop_enabled=self.crop_check.isChecked(),
+            )
+            self._reset_crop_tuning()
         except Exception as exc:
             self.logger.exception("Failed to save capture: %s", exc)
             QMessageBox.critical(self, "Error al guardar", f"No se pudo guardar la captura:\n{exc}")
@@ -2663,36 +2692,103 @@ class CastelCredCamQt(QMainWindow):
     def _autoframe_script_path(self) -> Path:
         return APP_ROOT / "photo_autoframe.py"
 
-    def _launch_photo_autoframe(self, image_path: Path, backup_path: Path) -> None:
-        script_path = self._autoframe_script_path()
-        if not script_path.exists():
-            self.logger.warning("Auto frame helper missing: %s", script_path)
-            self.autoframe_finished.emit(False, image_path.name)
-            return
-
+    def _launch_photo_autoframe(
+        self,
+        image_path: Path,
+        backup_path: Path,
+        dx: float,
+        dy: float,
+        zoom: float,
+        crop_enabled: bool,
+    ) -> None:
         self.is_processing_photo = True
         self.post_progress_bar.setValue(0)
+        self.post_progress_bar.setFormat("Iniciando procesamiento: 0%")
         self.post_progress_bar.setVisible(True)
         self.capture_button.setEnabled(False)
         self.capture_button_tab.setEnabled(False)
         self.retake_button.setEnabled(False)
         self.retake_button_tab.setEnabled(False)
-        self.post_progress_timer.start()
 
         def worker() -> None:
-            command = [sys.executable, str(script_path), str(image_path), "--backup", str(backup_path)]
             try:
-                result = subprocess.run(command, capture_output=True, text=True, check=False)
-                stdout = (result.stdout or "").strip()
-                stderr = (result.stderr or "").strip()
-                if stdout:
-                    self.logger.info("AutoFrame %s: %s", image_path.name, stdout)
-                if stderr:
-                    self.logger.warning("AutoFrame stderr %s: %s", image_path.name, stderr)
-                success = (result.returncode == 0)
-                self.autoframe_finished.emit(success, image_path.name)
+                self.post_progress_updated.emit(10, "Cargando foto original")
+                image = cv2.imread(str(backup_path))
+                if image is None:
+                    self.logger.error("No se pudo leer la imagen original para postprocesado en %s", backup_path)
+                    self.autoframe_finished.emit(False, image_path.name)
+                    return
+
+                height, width = image.shape[:2]
+
+                if not crop_enabled:
+                    self.post_progress_updated.emit(50, "Guardando imagen completa")
+                    cv2.imwrite(str(image_path), image)
+                    self.post_progress_updated.emit(100, "Completado")
+                    self.autoframe_finished.emit(True, image_path.name)
+                    return
+
+                has_manual_tuning = (abs(dx) > 1e-6 or abs(dy) > 1e-6 or abs(zoom - 1.0) > 1e-6)
+                if has_manual_tuning:
+                    self.post_progress_updated.emit(40, "Aplicando recorte manual")
+                    target_ratio = 3 / 4
+                    max_crop_h = min(height, int(width / target_ratio))
+                    max_crop_w = int(max_crop_h * target_ratio)
+                    crop_h = int(max_crop_h * 0.82)
+                    crop_h = max(CROP_MIN_HEIGHT, crop_h)
+                    crop_w = int(crop_h * target_ratio)
+                    x1 = (width - crop_w) // 2
+                    y1 = (height - crop_h) // 2
+                    crop_box = (x1, y1, x1 + crop_w, y1 + crop_h)
+
+                    crop_box = self._apply_manual_crop_tuning_values(crop_box, width, height, dx, dy, zoom)
+                    self.post_progress_updated.emit(70, "Procesando recorte")
+                    cropped = self._crop_frame_with_box(image, crop_box, output_size=(1500, 2000))
+                    self.post_progress_updated.emit(90, "Guardando imagen recortada")
+                    cv2.imwrite(str(image_path), cropped)
+                    self.post_progress_updated.emit(100, "Completado")
+                    self.autoframe_finished.emit(True, image_path.name)
+                    return
+
+                self.post_progress_updated.emit(30, "Buscando rostro en la foto")
+                cascades = self.face_cascades
+                eye_cascades = self.eye_cascades
+                face_box = self._detect_primary_face_for_postprocessing(image, cascades, eye_cascades)
+
+                if face_box is None:
+                    self.logger.warning("No se detecto rostro para %s. Aplicando recorte centrado fallback.", image_path.name)
+                    self.post_progress_updated.emit(60, "Rostro no encontrado. Usando centrado")
+                    target_ratio = 3 / 4
+                    max_crop_h = min(height, int(width / target_ratio))
+                    max_crop_w = int(max_crop_h * target_ratio)
+                    crop_h = int(max_crop_h * 0.82)
+                    crop_h = max(CROP_MIN_HEIGHT, crop_h)
+                    crop_w = int(crop_h * target_ratio)
+                    x1 = (width - crop_w) // 2
+                    y1 = (height - crop_h) // 2
+                    crop_box = (x1, y1, x1 + crop_w, y1 + crop_h)
+                    cropped = self._crop_frame_with_box(image, crop_box, output_size=(1500, 2000))
+                    cv2.imwrite(str(image_path), cropped)
+                    self.post_progress_updated.emit(100, "Rostro no encontrado (recorte centrado)")
+                    self.autoframe_finished.emit(True, f"{image_path.name} (Rostro no detectado, se aplico recorte centrado)")
+                    return
+
+                self.post_progress_updated.emit(60, "Rostro detectado. Buscando ojos")
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                gray = cv2.equalizeHist(gray)
+                eye_centers = self._detect_eyes_in_face(gray, face_box)
+
+                self.post_progress_updated.emit(80, "Calculando encuadre final")
+                crop_box = self._compute_portrait_crop_box(width, height, face_box, eye_centers)
+                cropped = self._crop_frame_with_box(image, crop_box, output_size=(1500, 2000))
+
+                self.post_progress_updated.emit(90, "Guardando imagen final")
+                cv2.imwrite(str(image_path), cropped)
+                self.post_progress_updated.emit(100, "Completado")
+                self.autoframe_finished.emit(True, image_path.name)
+
             except Exception as exc:
-                self.logger.exception("AutoFrame worker failed for %s: %s", image_path, exc)
+                self.logger.exception("Error en el postprocesamiento asincrono: %s", exc)
                 self.autoframe_finished.emit(False, image_path.name)
             finally:
                 with self.autoframe_jobs_lock:
@@ -2703,19 +2799,113 @@ class CastelCredCamQt(QMainWindow):
             self.autoframe_jobs[image_path] = thread
         thread.start()
 
+    def _on_post_progress_updated(self, value: int, message: str) -> None:
+        self.post_progress_bar.setValue(value)
+        self.post_progress_bar.setFormat(f"{message}: %p%")
+
+    def _apply_manual_crop_tuning_values(
+        self,
+        crop_box: tuple[int, int, int, int],
+        width: int,
+        height: int,
+        dx: float,
+        dy: float,
+        zoom: float,
+    ) -> tuple[int, int, int, int]:
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6 and abs(zoom - 1.0) < 1e-6:
+            return crop_box
+
+        x1, y1, x2, y2 = crop_box
+        crop_w = x2 - x1
+        crop_h = y2 - y1
+        center_x = x1 + crop_w / 2 + (crop_w * dx)
+        center_y = y1 + crop_h / 2 + (crop_h * dy)
+        tuned_h = max(CROP_MIN_HEIGHT, int(crop_h * zoom))
+        tuned_w = int(tuned_h * (3 / 4))
+        tuned_w = min(tuned_w, width)
+        tuned_h = min(tuned_h, height)
+        tuned_w = min(tuned_w, int(tuned_h * (3 / 4)))
+        x1 = int(center_x - tuned_w / 2)
+        y1 = int(center_y - tuned_h / 2)
+        x1 = max(0, min(x1, width - tuned_w))
+        y1 = max(0, min(y1, height - tuned_h))
+        return x1, y1, x1 + tuned_w, y1 + tuned_h
+
+    def _detect_primary_face_for_postprocessing(
+        self,
+        frame: np.ndarray,
+        face_cascades,
+        eye_cascades,
+    ) -> Optional[tuple[int, int, int, int]]:
+        if not face_cascades or all(cascade.empty() for cascade in face_cascades):
+            return None
+        height, width = frame.shape[:2]
+
+        search_frames = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
+        candidates: list[tuple[int, int, int, int]] = []
+        for search_frame, mirrored, offset in search_frames:
+            if search_frame.size == 0:
+                continue
+            candidates.extend(self._detect_face_candidates(search_frame, mirrored=mirrored, offset=offset, for_preview=False))
+            if candidates:
+                break
+
+        if not candidates:
+            return None
+
+        detection_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detection_gray = cv2.equalizeHist(detection_gray)
+        evaluated_candidates: list[tuple[tuple[int, int, int, int], list[tuple[int, int]]]] = []
+        for box in candidates:
+            x, y, w, h = self._clip_box(box, width, height)
+            if w < 36 or h < 36:
+                continue
+
+            cx = x + w / 2
+            cy = y + h / 2
+            if w < width * 0.07 or w > width * 0.35:
+                continue
+            if cx < width * 0.30 or cx > width * 0.70:
+                continue
+            if cy < height * 0.15 or cy > height * 0.65:
+                continue
+
+            eyes = self._detect_eyes_in_face(detection_gray, (x, y, w, h))
+            evaluated_candidates.append(((x, y, w, h), eyes))
+
+        verified = [candidate for candidate in evaluated_candidates if len(candidate[1]) >= 2]
+        if verified:
+            selection_pool = verified
+        else:
+            selection_pool = [
+                candidate
+                for candidate in evaluated_candidates
+                if candidate[0][1] + candidate[0][3] / 2 <= height * 0.65
+            ]
+
+        best_face: Optional[tuple[int, int, int, int]] = None
+        best_score = -1.0
+        for (x, y, w, h), eyes in selection_pool:
+            score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
+            if score > best_score:
+                best_score = score
+                best_face = (x, y, w, h)
+
+        return best_face
+
     def _on_post_progress_tick(self) -> None:
-        val = self.post_progress_bar.value()
-        if val < 90:
-            self.post_progress_bar.setValue(val + 3)
+        pass
 
     def _on_autoframe_finished(self, success: bool, filename: str) -> None:
-        self.post_progress_timer.stop()
         self.post_progress_bar.setValue(100)
         if success:
-            self.status_label.setText(f"Listo: {filename} postprocesado.")
+            if "Rostro no detectado" in filename or "Rostro no encontrado" in filename:
+                self.status_label.setText(f"Listo con advertencia: {filename}.")
+            else:
+                self.status_label.setText(f"Listo: {filename} postprocesado.")
         else:
             self.status_label.setText(f"Error en autoframe: {filename}")
-        QTimer.singleShot(400, self._cleanup_post_processing)
+        QTimer.singleShot(500, self._cleanup_post_processing)
 
     def _cleanup_post_processing(self) -> None:
         self.post_progress_bar.setVisible(False)

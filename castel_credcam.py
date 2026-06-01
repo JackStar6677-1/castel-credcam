@@ -837,7 +837,22 @@ def _autoframe_select_verified_face(
 
     detection_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     unique_candidates = _autoframe_unique_candidates(candidates, width, height)
-    candidates_to_verify = unique_candidates[:max_candidates]
+    
+    # Filtro robusto de tamaño y centrado para descartar falsos positivos en el postprocesado
+    filtered_candidates = []
+    for box in unique_candidates:
+        x, y, w, h = box
+        cx = x + w / 2
+        cy = y + h / 2
+        if w < width * 0.07 or w > width * 0.35:
+            continue
+        if cx < width * 0.30 or cx > width * 0.70:
+            continue
+        if cy < height * 0.15 or cy > height * 0.65:
+            continue
+        filtered_candidates.append(box)
+
+    candidates_to_verify = filtered_candidates[:max_candidates]
     evaluated = [(candidate, _autoframe_detect_eyes(detection_gray, candidate)) for candidate in candidates_to_verify]
     verified = [candidate for candidate in evaluated if len(candidate[1]) >= 2]
     if diagnostic_logger is not None:
