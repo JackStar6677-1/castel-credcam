@@ -1422,6 +1422,12 @@ class CastelCredCamQt(QMainWindow):
         students = self._active_students()
         course = self._active_course_text()
         idx = self._active_index()
+        
+        is_test = (self.session.mode == "test") if self.session else (self.mode == "test")
+        if is_test:
+            self.roster_status_label.setText("Modo Prueba activo.\nIngresa el nombre del alumno abajo y captura libremente.")
+            return
+
         if not students:
             if self.roster_map:
                 self.roster_status_label.setText(f"{course}\nSin alumnos cargados para este curso.")
@@ -1473,6 +1479,14 @@ class CastelCredCamQt(QMainWindow):
         if not completed_keys and not self.session and students:
             # Pre-session preview: no students are completed yet.
             completed_keys = set()
+
+        is_test = (self.session.mode == "test") if self.session else (self.mode == "test")
+        if is_test:
+            self.course_summary_label.setText("Modo Prueba activo")
+            self.course_progress_bar.setValue(0)
+            self.course_count_label.setText(f"{len(self.session.records) if self.session else 0} fotos de prueba capturadas")
+            self.course_table.setRowCount(0)
+            return
 
         self.course_summary_label.setText(
             f"{course} | {len(completed_keys)} capturados | {max(0, len(students) - len(completed_keys))} pendientes"
@@ -1580,15 +1594,19 @@ class CastelCredCamQt(QMainWindow):
             self.retake_button.setEnabled(False)
             self.retake_button_tab.setEnabled(False)
             self.close_session_button.setEnabled(False)
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+            self.align_button.setEnabled(False)
+            self.course_align_button.setEnabled(False)
             self.session = None
             return
 
         current = self.session.current_student()
-        current_name = current.display_name if current else "Lista completa"
+        current_name = current.display_name if current else "Captura libre"
         current_rut = current.rut if current and current.rut else "-"
         pending = self.session.roster_remaining if self.session.has_roster else 0
         self.session_label.setText(
-            f"{self.session.course_display} | {len(self.session.records)} capturados | {pending} pendientes"
+            f"{self.session.course_display} | {len(self.session.records)} capturados" + (f" | {pending} pendientes" if self.session.has_roster else "")
         )
         self.test_radio.setEnabled(False)
         self.course_radio.setEnabled(False)
@@ -1600,7 +1618,17 @@ class CastelCredCamQt(QMainWindow):
         self.retake_button.setEnabled(True)
         self.retake_button_tab.setEnabled(True)
         self.close_session_button.setEnabled(True)
-        self.status_label.setText(f"Actual: {current_name} | RUT: {current_rut}")
+        
+        has_roster = self.session.has_roster
+        self.prev_button.setEnabled(has_roster)
+        self.next_button.setEnabled(has_roster)
+        self.align_button.setEnabled(has_roster)
+        self.course_align_button.setEnabled(has_roster)
+        
+        if self.session.mode == "test":
+            self.status_label.setText(f"Modo Prueba | {len(self.session.records)} capturadas")
+        else:
+            self.status_label.setText(f"Actual: {current_name} | RUT: {current_rut}")
 
     def _load_roster_map(self, path: Path) -> dict[str, list[RosterStudent]]:
         suffix = path.suffix.lower()
