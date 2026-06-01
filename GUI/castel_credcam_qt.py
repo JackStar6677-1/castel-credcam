@@ -362,6 +362,8 @@ class CameraThread(QThread):
 
 
 class CastelCredCamQt(QMainWindow):
+    autoframe_finished = Signal(bool, str)
+
     def __init__(self) -> None:
         super().__init__()
         silence_opencv_logs()
@@ -418,6 +420,12 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer = QTimer(self)
         self.countdown_timer.setInterval(1000)
         self.countdown_timer.timeout.connect(self._countdown_tick)
+
+        self.is_processing_photo = False
+        self.post_progress_timer = QTimer(self)
+        self.post_progress_timer.setInterval(80)
+        self.post_progress_timer.timeout.connect(self._on_post_progress_tick)
+        self.autoframe_finished.connect(self._on_autoframe_finished)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
         self.preview_render_timer.setInterval(33)
@@ -881,6 +889,29 @@ class CastelCredCamQt(QMainWindow):
         self.preview_label.setMinimumSize(0, 0)
         preview_layout.addWidget(self.preview_label)
         layout.addWidget(self.preview_frame, 1)
+
+        self.post_progress_bar = QProgressBar()
+        self.post_progress_bar.setRange(0, 100)
+        self.post_progress_bar.setValue(0)
+        self.post_progress_bar.setTextVisible(True)
+        self.post_progress_bar.setFormat("Guardando y recortando foto: %p%")
+        self.post_progress_bar.setVisible(False)
+        self.post_progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #4F2B74;
+                border-radius: 6px;
+                background-color: #1A1822;
+                text-align: center;
+                color: #ffffff;
+                font-weight: bold;
+                height: 22px;
+            }
+            QProgressBar::chunk {
+                background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #9D4EDD, stop:1 #7B2CBF);
+                border-radius: 5px;
+            }
+        """)
+        layout.addWidget(self.post_progress_bar)
 
         bottom_row = QHBoxLayout()
         self.capture_button_tab = QPushButton("Capturar")
@@ -1777,7 +1808,7 @@ class CastelCredCamQt(QMainWindow):
             transformed = cv2.flip(transformed, 1)
         transformed = _rotate_frame(transformed, self.rotation_combo.currentText())
         detect_face = self.face_check.isChecked() or self.crop_check.isChecked()
-        face_box = self._detect_primary_face(transformed) if detect_face else None
+        face_box = self._detect_primary_face(transformed, for_preview=for_preview) if detect_face else None
         self.current_face_box = face_box
 
         output = transformed
@@ -1792,7 +1823,7 @@ class CastelCredCamQt(QMainWindow):
             crop_box = self._smooth_crop_box(crop_box)
             crop_box = self._apply_manual_crop_tuning(crop_box, transformed.shape[1], transformed.shape[0])
             self.current_crop_box = crop_box
-            target_size = (900, 1200) if for_preview else (1500, 2000)
+            target_size = (450, 600) if for_preview else (1500, 2000)
             output = self._crop_frame_with_box(transformed, crop_box, output_size=target_size)
         else:
             self.current_crop_box = None
@@ -2138,6 +2169,7 @@ class CastelCredCamQt(QMainWindow):
         frame: np.ndarray,
         mirrored: bool = False,
         offset: tuple[int, int] = (0, 0),
+        for_preview: bool = False,
     ) -> list[tuple[int, int, int, int]]:
         if frame.size == 0:
             return []
@@ -2151,14 +2183,16 @@ class CastelCredCamQt(QMainWindow):
         gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
         candidates: list[tuple[int, int, int, int]] = []
-        for cascade in self.face_cascades:
+        cascades_to_use = [self.face_cascades[0]] if for_preview else self.face_cascades
+        profiles_to_use = ((1.06, 4, (45, 45)),) if for_preview else (
+            (1.03, 3, (28, 28)),
+            (1.05, 4, (40, 40)),
+            (1.08, 5, (60, 60)),
+        )
+        for cascade in cascades_to_use:
             if cascade.empty():
                 continue
-            for scale_factor, min_neighbors, min_size in (
-                (1.03, 3, (28, 28)),
-                (1.05, 4, (40, 40)),
-                (1.08, 5, (60, 60)),
-            ):
+            for scale_factor, min_neighbors, min_size in profiles_to_use:
                 faces = cascade.detectMultiScale(
                     gray,
                     scaleFactor=scale_factor,
@@ -2182,13 +2216,16 @@ class CastelCredCamQt(QMainWindow):
         self,
         frame: np.ndarray,
         update_state: bool = True,
+        for_preview: bool = False,
     ) -> Optional[tuple[int, int, int, int]]:
-        if update_state and self.frame_counter % 2 != 0 and self.current_face_box is not None:
+        if update_state and for_preview and self.frame_counter % 5 != 0:
             return self.current_face_box
         if not self.face_cascades or all(cascade.empty() for cascade in self.face_cascades):
             return None
         height, width = frame.shape[:2]
-        search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
+        search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0))]
+        if not for_preview:
+            search_frames.append((cv2.flip(frame, 1), True, (0, 0)))
         if update_state and self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
             roi = self._expand_box(self.current_face_box, width, height, scale=2.15, pad_x=32, pad_y=32)
             x1, y1, x2, y2 = roi
@@ -2198,7 +2235,7 @@ class CastelCredCamQt(QMainWindow):
         for search_frame, mirrored, offset in search_frames:
             if search_frame.size == 0:
                 continue
-            candidates.extend(self._detect_face_candidates(search_frame, mirrored=mirrored, offset=offset))
+            candidates.extend(self._detect_face_candidates(search_frame, mirrored=mirrored, offset=offset, for_preview=for_preview))
             if candidates:
                 break
 
@@ -2274,7 +2311,19 @@ class CastelCredCamQt(QMainWindow):
             self._preview_frame_received = True
             self.first_frame_timer.stop()
             self.logger.info("First preview frame received. shape=%s", getattr(frame_source, "shape", None))
+        
+        # Obtener el frame de vista previa completo (rotado/volteado) sin recortar
         frame = self._render_preview_frame(frame_source)
+
+        # Dibujar la guía estática de encuadre si está activada
+        if self.guide_check.isChecked():
+            self._draw_guides(frame)
+
+        # Detectar y dibujar el anclaje de rostro en la vista previa si está activado
+        if self.face_check.isChecked():
+            face_box = self._detect_primary_face(frame, for_preview=True)
+            if face_box is not None:
+                self._draw_face_anchor(frame, crop_box=None, face_box=face_box)
 
         if self.guide_check.isChecked() or self.face_check.isChecked():
             info_lines = self._preview_status_lines()
@@ -2471,15 +2520,13 @@ class CastelCredCamQt(QMainWindow):
 
         image_path = self.session.session_dir / record.filename
         backup_path = self.session.backup_dir / record.filename
-        source_backup_path = self._next_backup_path(backup_path)
         try:
             if not cv2.imwrite(str(image_path), transformed):
                 raise RuntimeError(f"No se pudo guardar la foto en {image_path}")
-            if not cv2.imwrite(str(source_backup_path), source_backup):
-                raise RuntimeError(f"No se pudo guardar el respaldo fuente en {source_backup_path}")
+            ensure_photo_backup(image_path, backup_path)
             append_csv_record(self.session.csv_path, record)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
-            self._launch_photo_autoframe(image_path, source_backup_path)
+            self._launch_photo_autoframe(image_path, backup_path)
         except Exception as exc:
             self.logger.exception("Failed to save capture: %s", exc)
             QMessageBox.critical(self, "Error al guardar", f"No se pudo guardar la captura:\n{exc}")
@@ -2511,6 +2558,8 @@ class CastelCredCamQt(QMainWindow):
         self._refresh_course_view(force=True)
 
     def capture_photo(self) -> None:
+        if self.is_processing_photo:
+            return
         if self.countdown_timer.isActive():
             return
         if self.session is None:
@@ -2554,6 +2603,8 @@ class CastelCredCamQt(QMainWindow):
         self._schedule_preview_render(immediate=True)
 
     def retake_last(self) -> None:
+        if self.is_processing_photo:
+            return
         if self.session is None or not self.session.records:
             self.status_label.setText("No hay foto para rehacer.")
             return
@@ -2603,7 +2654,17 @@ class CastelCredCamQt(QMainWindow):
         script_path = self._autoframe_script_path()
         if not script_path.exists():
             self.logger.warning("Auto frame helper missing: %s", script_path)
+            self.autoframe_finished.emit(False, image_path.name)
             return
+
+        self.is_processing_photo = True
+        self.post_progress_bar.setValue(0)
+        self.post_progress_bar.setVisible(True)
+        self.capture_button.setEnabled(False)
+        self.capture_button_tab.setEnabled(False)
+        self.retake_button.setEnabled(False)
+        self.retake_button_tab.setEnabled(False)
+        self.post_progress_timer.start()
 
         def worker() -> None:
             command = [sys.executable, str(script_path), str(image_path), "--backup", str(backup_path)]
@@ -2615,10 +2676,11 @@ class CastelCredCamQt(QMainWindow):
                     self.logger.info("AutoFrame %s: %s", image_path.name, stdout)
                 if stderr:
                     self.logger.warning("AutoFrame stderr %s: %s", image_path.name, stderr)
-                if result.returncode != 0:
-                    self.logger.warning("AutoFrame returned %s for %s", result.returncode, image_path.name)
+                success = (result.returncode == 0)
+                self.autoframe_finished.emit(success, image_path.name)
             except Exception as exc:
                 self.logger.exception("AutoFrame worker failed for %s: %s", image_path, exc)
+                self.autoframe_finished.emit(False, image_path.name)
             finally:
                 with self.autoframe_jobs_lock:
                     self.autoframe_jobs.pop(image_path, None)
@@ -2627,6 +2689,29 @@ class CastelCredCamQt(QMainWindow):
         with self.autoframe_jobs_lock:
             self.autoframe_jobs[image_path] = thread
         thread.start()
+
+    def _on_post_progress_tick(self) -> None:
+        val = self.post_progress_bar.value()
+        if val < 90:
+            self.post_progress_bar.setValue(val + 3)
+
+    def _on_autoframe_finished(self, success: bool, filename: str) -> None:
+        self.post_progress_timer.stop()
+        self.post_progress_bar.setValue(100)
+        if success:
+            self.status_label.setText(f"Listo: {filename} postprocesado.")
+        else:
+            self.status_label.setText(f"Error en autoframe: {filename}")
+        QTimer.singleShot(400, self._cleanup_post_processing)
+
+    def _cleanup_post_processing(self) -> None:
+        self.post_progress_bar.setVisible(False)
+        self.post_progress_bar.setValue(0)
+        self.capture_button.setEnabled(True)
+        self.capture_button_tab.setEnabled(True)
+        self.retake_button.setEnabled(True)
+        self.retake_button_tab.setEnabled(True)
+        self.is_processing_photo = False
 
     def _wait_for_autoframe_job(self, image_path: Path, timeout: float = 10.0) -> bool:
         with self.autoframe_jobs_lock:

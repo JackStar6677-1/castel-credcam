@@ -1416,25 +1416,11 @@ class CastelCredCamGUI:
         transformed = self._apply_transformations(frame)
         self.current_source_frame = transformed.copy()
         self.frame_counter += 1
-        self.current_face_box = self._detect_primary_face(transformed)
-        if self.crop_portrait_var.get():
-            next_crop_box = self._compute_portrait_crop_box(
-                transformed.shape[1], transformed.shape[0], self.current_face_box, self.current_eye_centers
-            )
-            smoothed_box = self._smooth_crop_box(next_crop_box)
-            self.current_crop_box = self._constrain_crop_box(
-                smoothed_box,
-                transformed.shape[1],
-                transformed.shape[0],
-            )
-            portrait_frame = self._crop_frame_with_box(transformed, self.current_crop_box)
-            self.current_frame = portrait_frame.copy()
-            preview_frame = self._decorate_frame(portrait_frame.copy())
-        else:
-            self.current_crop_box = None
-            self.stable_crop_box = None
-            self.current_frame = transformed.copy()
-            preview_frame = self._decorate_frame(transformed.copy())
+        self.current_face_box = self._detect_primary_face(transformed, for_preview=True)
+        self.current_crop_box = None
+        self.stable_crop_box = None
+        self.current_frame = transformed.copy()
+        preview_frame = self._decorate_frame(transformed.copy())
         display_frame = self._fit_frame_to_preview(preview_frame)
 
         rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -1537,7 +1523,7 @@ class CastelCredCamGUI:
         eye_bonus = 1.0 + (0.22 * min(2, eye_count))
         return area * max(0.2, center_bias) * aspect_penalty * eye_bonus
 
-    def _detect_face_candidates(self, frame, mirrored: bool = False, offset: tuple[int, int] = (0, 0)) -> list[tuple[int, int, int, int]]:
+    def _detect_face_candidates(self, frame, mirrored: bool = False, offset: tuple[int, int] = (0, 0), for_preview: bool = False) -> list[tuple[int, int, int, int]]:
         if frame.size == 0:
             return []
         height, width = frame.shape[:2]
@@ -1549,14 +1535,16 @@ class CastelCredCamGUI:
         gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.equalizeHist(gray)
         candidates: list[tuple[int, int, int, int]] = []
-        for cascade in self.face_cascades:
+        cascades_to_use = [self.face_cascades[0]] if for_preview else self.face_cascades
+        profiles_to_use = ((1.06, 4, (45, 45)),) if for_preview else (
+            (1.03, 3, (28, 28)),
+            (1.05, 4, (40, 40)),
+            (1.08, 5, (60, 60)),
+        )
+        for cascade in cascades_to_use:
             if cascade.empty():
                 continue
-            for scale_factor, min_neighbors, min_size in (
-                (1.03, 3, (28, 28)),
-                (1.05, 4, (40, 40)),
-                (1.08, 5, (60, 60)),
-            ):
+            for scale_factor, min_neighbors, min_size in profiles_to_use:
                 faces = cascade.detectMultiScale(
                     gray,
                     scaleFactor=scale_factor,
@@ -1595,13 +1583,15 @@ class CastelCredCamGUI:
 
         return frame
 
-    def _detect_primary_face(self, frame) -> Optional[tuple[int, int, int, int]]:
-        if self.frame_counter % 2 != 0 and self.current_face_box is not None:
+    def _detect_primary_face(self, frame, for_preview: bool = False) -> Optional[tuple[int, int, int, int]]:
+        if for_preview and self.frame_counter % 5 != 0:
             return self.current_face_box
         if not self.face_cascades or all(cascade.empty() for cascade in self.face_cascades):
             return None
         height, width = frame.shape[:2]
-        search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0)), (cv2.flip(frame, 1), True, (0, 0))]
+        search_frames: list[tuple[np.ndarray, bool, tuple[int, int]]] = [(frame, False, (0, 0))]
+        if not for_preview:
+            search_frames.append((cv2.flip(frame, 1), True, (0, 0)))
         if self.current_face_box is not None and self.frame_counter - self.last_face_detect_frame <= FACE_HOLD_FRAMES:
             x1, y1, x2, y2 = self._expand_box(self.current_face_box, width, height, scale=2.15, pad_x=32, pad_y=32)
             search_frames.insert(0, (frame[y1:y2, x1:x2], False, (x1, y1)))
@@ -1610,7 +1600,7 @@ class CastelCredCamGUI:
         for search_frame, mirrored, offset in search_frames:
             if search_frame.size == 0:
                 continue
-            candidates.extend(self._detect_face_candidates(search_frame, mirrored=mirrored, offset=offset))
+            candidates.extend(self._detect_face_candidates(search_frame, mirrored=mirrored, offset=offset, for_preview=for_preview))
             if candidates:
                 break
 
@@ -1851,7 +1841,7 @@ class CastelCredCamGUI:
                 )
 
         if self.face_guide_var.get():
-            preview_face_box = self._detect_primary_face(frame)
+            preview_face_box = self._detect_primary_face(frame, for_preview=True)
             if preview_face_box is not None:
                 fx, fy, fw, fh = preview_face_box
                 cv2.rectangle(frame, (fx, fy), (fx + fw, fy + fh), (244, 201, 93), 2)
@@ -2036,9 +2026,17 @@ class CastelCredCamGUI:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         image_path = self.session.session_dir / filename
         backup_path = self.session.backup_dir / filename
-        source_backup_path = self._next_backup_path(backup_path)
 
-        if not cv2.imwrite(str(image_path), self.current_frame.copy()):
+        capture_frame = self.current_frame.copy()
+        if self.crop_portrait_var.get():
+            face_box = self._detect_primary_face(capture_frame, for_preview=False)
+            crop_box = self._compute_portrait_crop_box(
+                capture_frame.shape[1], capture_frame.shape[0], face_box, self.current_eye_centers
+            )
+            crop_box = self._constrain_crop_box(crop_box, capture_frame.shape[1], capture_frame.shape[0])
+            capture_frame = self._crop_frame_with_box(capture_frame, crop_box)
+
+        if not cv2.imwrite(str(image_path), capture_frame):
             self.logger.error("Image save failed: %s", image_path)
             messagebox.showerror(APP_TITLE, f"No se pudo guardar la imagen en {image_path}")
             return
@@ -2054,11 +2052,9 @@ class CastelCredCamGUI:
         append_csv_record(self.session.csv_path, record)
         backup_status = "respaldo OK"
         try:
-            source_frame = self.current_source_frame.copy() if self.current_source_frame is not None else self.current_frame.copy()
-            if not cv2.imwrite(str(source_backup_path), source_frame):
-                raise RuntimeError(f"No se pudo guardar el respaldo fuente en {source_backup_path}")
+            ensure_photo_backup(image_path, backup_path)
             ensure_photo_backup(self.session.csv_path, self.session.backup_dir / CSV_FILENAME)
-            self._launch_photo_autoframe(image_path, source_backup_path)
+            self._launch_photo_autoframe(image_path, backup_path)
         except Exception as exc:
             self.logger.exception("Backup copy failed for %s: %s", filename, exc)
             backup_status = f"respaldo parcial: {exc}"
