@@ -437,6 +437,7 @@ class CastelCredCamQt(QMainWindow):
         self.first_frame_timer.setSingleShot(True)
         self.first_frame_timer.timeout.connect(self._on_first_frame_timeout)
         self._preview_frame_received = False
+        self._auto_camera_failures: set[tuple[int, int]] = set()
 
         self.roster_source_path: Optional[Path] = None
         self.roster_status_text = "Carga una lista para avanzar por curso."
@@ -1206,6 +1207,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_eye_centers = []
         self.preview_stable_crop_box = None
         self.preview_detection_tick = 0
+        self._auto_camera_failures.discard((index, backend_id))
         save_last_camera(APP_ROOT, index, backend_key_from_id(backend_id))
         self.logger.info("Camera selected index=%s backend=%s alias=%s", index, backend_name, alias)
         self.source_status_label.setText(
@@ -1281,6 +1283,7 @@ class CastelCredCamQt(QMainWindow):
         self.logger.error("Camera error: %s", message)
         self.status_label.setText(message)
         self._show_preview_message(message)
+        self._try_next_camera_source("error de camara")
 
     def _show_preview_message(self, message: str) -> None:
         self.preview_label.clear()
@@ -1324,10 +1327,52 @@ class CastelCredCamQt(QMainWindow):
 
     def refresh_sources(self) -> None:
         self.aliases = load_camera_aliases(APP_ROOT)
+        self._auto_camera_failures.clear()
         self.available_cameras = list_available_cameras(self.aliases)
         self._load_camera_choices()
         self._select_default_camera()
         self.status_label.setText("Fuentes actualizadas.")
+
+    def _try_next_camera_source(self, reason: str) -> bool:
+        if len(self.camera_choices) <= 1:
+            return False
+
+        current_row = self.camera_combo.currentIndex()
+        if current_row < 0 or current_row >= len(self.camera_choices):
+            current_row = 0
+
+        current_key = (self.camera_index, self.backend_id)
+        self._auto_camera_failures.add(current_key)
+
+        for offset in range(1, len(self.camera_choices) + 1):
+            next_row = (current_row + offset) % len(self.camera_choices)
+            index, _label, backend_id, backend_name, alias = self.camera_choices[next_row]
+            if (index, backend_id) in self._auto_camera_failures:
+                continue
+
+            self.logger.warning(
+                "Switching camera automatically after %s. from=%s/%s to=%s/%s alias=%s",
+                reason,
+                self.camera_index,
+                self.backend_name,
+                index,
+                backend_name,
+                alias,
+            )
+            self.status_label.setText(f"Cambiando fuente por {reason}: {alias} | {backend_name}")
+            self.camera_combo.blockSignals(True)
+            self.source_list.blockSignals(True)
+            self.camera_combo.setCurrentIndex(next_row)
+            self.source_list.setCurrentRow(next_row)
+            self.camera_combo.blockSignals(False)
+            self.source_list.blockSignals(False)
+            self._apply_selected_camera(next_row)
+            QTimer.singleShot(250, self._start_camera_thread)
+            return True
+
+        self.logger.error("All camera sources failed after %s.", reason)
+        self.status_label.setText("No hay otra fuente de camara usable. Refresca fuentes o revisa el cable/app.")
+        return False
 
     def _on_resolution_selected(self, *_args) -> None:
         if not self.camera_choices:
@@ -2587,6 +2632,7 @@ class CastelCredCamQt(QMainWindow):
         )
         self.status_label.setText("La camara abre, pero aun no entrega imagen.")
         self._show_preview_message("La camara abre, pero no entrega imagen")
+        self._try_next_camera_source("no entregar imagen")
 
     def _current_capture_student(self) -> tuple[str, str]:
         name, rut, _roster_index = self._capture_identity_snapshot()
