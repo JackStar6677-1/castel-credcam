@@ -6,6 +6,16 @@
       "label": "Camara laptop"
     },
     {
+      "index": 0,
+      "backend": "msmf",
+      "label": "Camara laptop"
+    },
+    {
+      "index": 0,
+      "backend": "any",
+      "label": "Camara laptop"
+    },
+    {
       "index": 1,
       "backend": "msmf",
       "label": "DroidCam Video"
@@ -14,11 +24,6 @@
       "index": 2,
       "backend": "dshow",
       "label": "iVCam"
-    },
-    {
-      "index": 2,
-      "backend": "dshow",
-      "label": "Camara virtual inestable"
     },
     {
       "index": 3,
