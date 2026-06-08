@@ -452,10 +452,10 @@ class CastelCredCamQt(QMainWindow):
         self._build_ui()
         self._update_crop_tuning_label()
         self._install_shortcuts()
-        self._load_camera_choices()   # muestra "Detectando..." hasta que el scan termine
+        self._start_camera_scan()     # arranca antes que _load_camera_choices para que muestre "Detectando..."
+        self._load_camera_choices()   # muestra "Detectando..." mientras el scan corre en background
         self._refresh_course_view()
         self._sync_session_ui()
-        self._start_camera_scan()     # deteccion en background, no bloquea
 
     def _build_stylesheet(self) -> str:
         return f"""
