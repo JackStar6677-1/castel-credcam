@@ -445,8 +445,8 @@ class CastelCredCamQt(QMainWindow):
         self.course_text = ""
 
         self.setWindowTitle(APP_TITLE)
-        self.resize(1600, 980)
-        self.setMinimumSize(1280, 820)
+        self.resize(1600, 960)
+        self.setMinimumSize(1360, 820)
         self.setStyleSheet(self._build_stylesheet())
 
         self._build_ui()
@@ -497,7 +497,7 @@ class CastelCredCamQt(QMainWindow):
                 color: {TEXT_PRIMARY};
             }}
             QLabel#AppTitle {{
-                font-size: 23pt;
+                font-size: 16pt;
                 font-weight: 800;
                 color: {TEXT_PRIMARY};
             }}
@@ -625,6 +625,7 @@ class CastelCredCamQt(QMainWindow):
         self.sidebar_scroll.setWidgetResizable(True)
         self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.sidebar_scroll.setMinimumWidth(360)
 
         sidebar_host = QWidget()
         self.sidebar_scroll.setWidget(sidebar_host)
@@ -1073,9 +1074,9 @@ class CastelCredCamQt(QMainWindow):
         window_width = max(1280, self.width())
         window_height = max(820, self.height())
 
-        sidebar_width = int(window_width * 0.23)
-        sidebar_width = max(300, min(420, sidebar_width))
-        main_width = max(720, window_width - sidebar_width - 24)
+        sidebar_width = int(window_width * 0.27)
+        sidebar_width = max(360, min(480, sidebar_width))
+        main_width = max(680, window_width - sidebar_width - 24)
         self.root_splitter.setSizes([sidebar_width, main_width])
 
         preview_height = int(window_height * 0.64)
