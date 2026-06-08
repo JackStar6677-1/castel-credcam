@@ -364,6 +364,7 @@ class CameraThread(QThread):
 class CastelCredCamQt(QMainWindow):
     autoframe_finished = Signal(bool, str)
     post_progress_updated = Signal(int, str)
+    camera_scan_ready = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -378,7 +379,8 @@ class CastelCredCamQt(QMainWindow):
         self.logger.info("Args: %s", sys.argv[1:])
 
         self.aliases = load_camera_aliases(APP_ROOT)
-        self.available_cameras = list_available_cameras(self.aliases)
+        self.available_cameras: list[tuple[int, str, int, str, str]] = []
+        self._camera_scan_running = False
         self.camera_index = 0
         self.backend_id = cv2.CAP_ANY
         self.backend_name = "Automatico"
@@ -424,6 +426,7 @@ class CastelCredCamQt(QMainWindow):
 
         self.is_processing_photo = False
         self.autoframe_finished.connect(self._on_autoframe_finished)
+        self.camera_scan_ready.connect(self._on_camera_scan_ready)
         self.post_progress_updated.connect(self._on_post_progress_updated)
         self.preview_render_timer = QTimer(self)
         self.preview_render_timer.setSingleShot(True)
@@ -449,10 +452,10 @@ class CastelCredCamQt(QMainWindow):
         self._build_ui()
         self._update_crop_tuning_label()
         self._install_shortcuts()
-        self._load_camera_choices()
-        self._select_default_camera()
+        self._load_camera_choices()   # muestra "Detectando..." hasta que el scan termine
         self._refresh_course_view()
         self._sync_session_ui()
+        self._start_camera_scan()     # deteccion en background, no bloquea
 
     def _build_stylesheet(self) -> str:
         return f"""
@@ -1109,11 +1112,17 @@ class CastelCredCamQt(QMainWindow):
         self.camera_combo.blockSignals(False)
         self.source_list.blockSignals(False)
         if not self.camera_choices:
-            self.camera_combo.addItem("No se detectaron camaras", None)
-            self.source_list.addItem(QListWidgetItem("No se detectaron fuentes"))
+            if self._camera_scan_running:
+                self.camera_combo.addItem("Detectando camaras...", None)
+                self.source_list.addItem(QListWidgetItem("Detectando fuentes..."))
+            else:
+                self.camera_combo.addItem("No se detectaron camaras", None)
+                self.source_list.addItem(QListWidgetItem("No se detectaron fuentes"))
         if self.camera_choices:
             self.logger.info("Detected cameras: %s", len(self.camera_choices))
             self.source_status_label.setText(f"{len(self.camera_choices)} fuentes detectadas. Selecciona una y refresca si cambias el cliente.")
+        elif self._camera_scan_running:
+            self.source_status_label.setText("Detectando fuentes de video, por favor espera...")
         else:
             self.logger.warning("No cameras detected at startup.")
             self.source_status_label.setText("No se detectaron fuentes de video.")
@@ -1321,13 +1330,40 @@ class CastelCredCamQt(QMainWindow):
         if self.camera_combo.currentIndex() != row:
             self.camera_combo.setCurrentIndex(row)
 
+    def _start_camera_scan(self) -> None:
+        """Detecta camaras disponibles en un hilo de fondo para no bloquear la UI."""
+        if self._camera_scan_running:
+            return
+        self._camera_scan_running = True
+        aliases = self.aliases
+        self.logger.info("Camera scan started in background thread.")
+
+        def worker() -> None:
+            try:
+                cameras = list_available_cameras(aliases)
+            except Exception as exc:
+                self.logger.exception("Camera scan failed: %s", exc)
+                cameras = []
+            self.camera_scan_ready.emit(cameras)
+
+        t = threading.Thread(target=worker, name="camera-scan", daemon=True)
+        t.start()
+
+    def _on_camera_scan_ready(self, cameras: list) -> None:
+        """Llamado en el hilo principal cuando termina la deteccion de camaras."""
+        self._camera_scan_running = False
+        self.available_cameras = cameras
+        self.logger.info("Camera scan finished. cameras=%s", len(cameras))
+        self._load_camera_choices()
+        self._select_default_camera()
+
     def refresh_sources(self) -> None:
         self.aliases = load_camera_aliases(APP_ROOT)
         self._auto_camera_failures.clear()
-        self.available_cameras = list_available_cameras(self.aliases)
+        self.available_cameras = []
         self._load_camera_choices()
-        self._select_default_camera()
-        self.status_label.setText("Fuentes actualizadas.")
+        self.status_label.setText("Buscando fuentes de video...")
+        self._start_camera_scan()
 
     def _try_next_camera_source(self, reason: str) -> bool:
         if len(self.camera_choices) <= 1:
