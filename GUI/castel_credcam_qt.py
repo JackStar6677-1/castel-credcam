@@ -154,7 +154,6 @@ def _sanitize_filename_component(value: str) -> str:
     text = text.replace("/", "-").replace("\\", "-")
     text = "".join(ch for ch in text if ch.isalnum() or ch in {" ", "-", "_"})
     text = " ".join(text.split())
-    text = text.replace(" ", " ")
     return text or "sin_nombre"
 
 
@@ -424,9 +423,6 @@ class CastelCredCamQt(QMainWindow):
         self.countdown_timer.timeout.connect(self._countdown_tick)
 
         self.is_processing_photo = False
-        self.post_progress_timer = QTimer(self)
-        self.post_progress_timer.setInterval(80)
-        self.post_progress_timer.timeout.connect(self._on_post_progress_tick)
         self.autoframe_finished.connect(self._on_autoframe_finished)
         self.post_progress_updated.connect(self._on_post_progress_updated)
         self.preview_render_timer = QTimer(self)
@@ -2796,7 +2792,7 @@ class CastelCredCamQt(QMainWindow):
             return
 
         if self.session.has_roster:
-            self.session.retreat()
+            self._reconcile_session_roster_progress()
 
         self.logger.info("Retake last. removed=%s records=%s", last_record.filename, len(self.session.records))
         self.status_label.setText(f"Foto eliminada: {last_record.filename}")
@@ -3016,9 +3012,6 @@ class CastelCredCamQt(QMainWindow):
                 best_face = (x, y, w, h)
 
         return best_face
-
-    def _on_post_progress_tick(self) -> None:
-        pass
 
     def _on_autoframe_finished(self, success: bool, filename: str) -> None:
         self.post_progress_bar.setValue(100)
