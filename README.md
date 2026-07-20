@@ -13,6 +13,7 @@ CastelCredCam está pensada para jornadas reales de fotografía escolar: abrir c
 - Flujo por consola para capturas rápidas sin roster ni autoframe postfoto.
 - Carga de nómina desde Excel o CSV.
 - Guardado por curso con `index.csv` y respaldo en `fotos_respaldo/`.
+- Configuración local opcional para usar fotos y nóminas fuera del repositorio.
 - Reencuadre automático postfoto en las GUIs, con descarte de falsos rostros y margen para la cabeza.
 - Reintento de la última captura; auditoría persistente en Tk legacy y consola.
 - Logs técnicos de sesión y de decisión del autoframe para auditoría y soporte.
@@ -156,6 +157,8 @@ CastelCredCam/
     |-- cli_YYYYMMDD_HHMMSS_PID.log
     `-- autoframe_YYYYMMDD_HHMMSS_PID.log
 ```
+
+En equipos de operación real, la GUI puede leer `local_config.json` para guardar las fotos fuera del repositorio, por ejemplo en `D:\Colegio\Fotos_Perfil_Estudiantes_Castel`, y cargar una nómina predeterminada al abrir. Ese archivo está ignorado por Git junto con `fotos/`, `fotos_respaldo/` y `auditoria_fotos/`, porque las fotos y datos de estudiantes no deben versionarse.
 
 ## Instalación
 

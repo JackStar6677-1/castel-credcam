@@ -29,7 +29,7 @@ La forma mas segura de trabajar es esta:
 
 ## Estructura de carpetas
 
-La salida local esperada es parecida a esto:
+La salida esperada es parecida a esto:
 
 ```text
 CastelCredCam/
@@ -53,6 +53,21 @@ Reglas clave:
 - el respaldo fuente vive en `fotos_respaldo/<curso>/` y conserva la toma completa sin recorte de credencial
 - cada captura actualiza el `index.csv`
 - cada arranque genera un log nuevo
+- en Windows, la GUI puede usar `local_config.json` para guardar las fotos fuera del repo; por ejemplo `D:\Colegio\Fotos_Perfil_Estudiantes_Castel`
+- `local_config.json`, `fotos/`, `fotos_respaldo/` y `auditoria_fotos/` estan ignorados por Git; las fotos de estudiantes no deben subirse al repositorio
+
+## Configuracion local recomendada
+
+Para operar en el PC de fotografia, deja `local_config.json` en la raiz del repo:
+
+```json
+{
+  "data_root": "D:\\Colegio\\Fotos_Perfil_Estudiantes_Castel",
+  "default_roster": "D:\\Colegio\\Nominas_Castel_2026\\NÓMINA DE ESTUDIANTES 2026.xlsx"
+}
+```
+
+La GUI detecta esa configuracion al iniciar, muestra la carpeta de datos en el panel de sesion y carga automaticamente la nomina si existe. Si el archivo no esta, intenta detectar `D:\Colegio\Fotos_Perfil_Estudiantes_Castel` y luego cae al modo tradicional dentro del repo.
 
 ## Formato de nombres
 

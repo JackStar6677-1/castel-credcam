@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import subprocess
 import sys
@@ -114,6 +115,78 @@ FACE_HOLD_FRAMES = 6
 CROP_MIN_HEIGHT = 220
 CROP_MANUAL_STEP = 0.035
 CROP_MANUAL_ZOOM_STEP = 1.07
+LOCAL_CONFIG_FILENAME = "local_config.json"
+DEFAULT_EXTERNAL_DATA_ROOT = Path("D:/Colegio/Fotos_Perfil_Estudiantes_Castel")
+DEFAULT_ROSTER_DIR = Path("D:/Colegio/Nominas_Castel_2026")
+PREFERRED_ROSTER_NAMES = (
+    "NÓMINA DE ESTUDIANTES 2026.xlsx",
+    "NOMINA DE ESTUDIANTES 2026.xlsx",
+    "CASTELGANDOLFO_lista_cursos_2026.xlsx",
+)
+
+
+def _local_config_path() -> Path:
+    return APP_ROOT / LOCAL_CONFIG_FILENAME
+
+
+def _read_local_config() -> dict[str, object]:
+    path = _local_config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_local_config(payload: dict[str, object]) -> None:
+    _local_config_path().write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _valid_data_root(path: Path) -> bool:
+    return (path / PHOTOS_DIRNAME).is_dir() and (path / BACKUP_PHOTOS_DIRNAME).is_dir()
+
+
+def _detect_data_root(config: dict[str, object]) -> Path:
+    configured = config.get("data_root")
+    candidates = []
+    if isinstance(configured, str) and configured.strip():
+        candidates.append(Path(configured))
+    candidates.append(DEFAULT_EXTERNAL_DATA_ROOT)
+    candidates.append(APP_ROOT)
+    for candidate in candidates:
+        try:
+            if _valid_data_root(candidate):
+                return candidate
+        except OSError:
+            continue
+    return APP_ROOT
+
+
+def _detect_default_roster(config: dict[str, object]) -> Optional[Path]:
+    configured = config.get("default_roster")
+    if isinstance(configured, str) and configured.strip():
+        path = Path(configured)
+        if path.is_file():
+            return path
+    if not DEFAULT_ROSTER_DIR.is_dir():
+        return None
+    for name in PREFERRED_ROSTER_NAMES:
+        path = DEFAULT_ROSTER_DIR / name
+        if path.is_file():
+            return path
+    candidates = [
+        path
+        for path in DEFAULT_ROSTER_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() in {".xlsx", ".xlsm", ".csv", ".tsv", ".txt"}
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _normalize_text(value: object) -> str:
@@ -378,6 +451,12 @@ class CastelCredCamQt(QMainWindow):
         self.logger.info("CWD: %s", Path.cwd())
         self.logger.info("Args: %s", sys.argv[1:])
 
+        self.local_config = _read_local_config()
+        self.data_root = _detect_data_root(self.local_config)
+        self.default_roster_path = _detect_default_roster(self.local_config)
+        self.logger.info("Data root: %s", self.data_root)
+        self.logger.info("Default roster: %s", self.default_roster_path or "not configured")
+
         self.aliases = load_camera_aliases(APP_ROOT)
         self.available_cameras: list[tuple[int, str, int, str, str]] = []
         self._camera_scan_running = False
@@ -454,6 +533,7 @@ class CastelCredCamQt(QMainWindow):
         self._install_shortcuts()
         self._start_camera_scan()     # arranca antes que _load_camera_choices para que muestre "Detectando..."
         self._load_camera_choices()   # muestra "Detectando..." mientras el scan corre en background
+        self._auto_load_default_roster()
         self._refresh_course_view()
         self._sync_session_ui()
 
@@ -684,6 +764,11 @@ class CastelCredCamQt(QMainWindow):
         self.roster_path_label.setObjectName("Muted")
         self.roster_path_label.setWordWrap(True)
         session_layout.addWidget(self.roster_path_label)
+
+        self.data_root_label = QLabel(f"Datos: {self.data_root}")
+        self.data_root_label.setObjectName("Muted")
+        self.data_root_label.setWordWrap(True)
+        session_layout.addWidget(self.data_root_label)
 
         self.start_button = QPushButton("Iniciar sesion")
         self.start_button.clicked.connect(self.start_session)
@@ -1837,31 +1922,57 @@ class CastelCredCamQt(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "Seleccionar lista de alumnos",
-            str(Path.home()),
+            str(self._default_roster_dialog_dir()),
             "Listas (*.xlsx *.xlsm *.csv *.tsv *.txt)",
         )
         if not file_name:
             return
 
         path = Path(file_name)
+        self._load_roster_from_path(path, persist=True, show_errors=True)
+
+    def _default_roster_dialog_dir(self) -> Path:
+        if self.roster_source_path and self.roster_source_path.parent.exists():
+            return self.roster_source_path.parent
+        if self.default_roster_path and self.default_roster_path.parent.exists():
+            return self.default_roster_path.parent
+        if DEFAULT_ROSTER_DIR.exists():
+            return DEFAULT_ROSTER_DIR
+        return Path.home()
+
+    def _load_roster_from_path(self, path: Path, persist: bool, show_errors: bool) -> bool:
         self.logger.info("Import roster requested: %s", path)
         try:
             roster_map = self._load_roster_map(path)
         except Exception as exc:
             self.logger.exception("Failed to load roster: %s", exc)
-            QMessageBox.critical(self, "Error al cargar lista", f"No se pudo leer la lista:\n{exc}")
-            return
+            if show_errors:
+                QMessageBox.critical(self, "Error al cargar lista", f"No se pudo leer la lista:\n{exc}")
+            return False
 
         if not roster_map:
-            QMessageBox.warning(self, "Lista vacia", "No se encontraron alumnos en el archivo seleccionado.")
-            return
+            if show_errors:
+                QMessageBox.warning(self, "Lista vacia", "No se encontraron alumnos en el archivo seleccionado.")
+            return False
 
+        self._apply_roster(path, roster_map, persist=persist)
+        return True
+
+    def _apply_roster(self, path: Path, roster_map: dict[str, list[RosterStudent]], persist: bool) -> None:
         self.roster_map = roster_map
         self.roster_order = list(roster_map.keys())
         self.roster_source_path = path
         self.roster_status_text = f"Lista cargada: {path.name} ({len(roster_map)} cursos)"
         self.roster_path_label.setText(self.roster_status_text)
         self.logger.info("Roster loaded: %s courses=%s", path.name, len(roster_map))
+        if persist:
+            self.default_roster_path = path
+            self.local_config["default_roster"] = str(path)
+            self.local_config["data_root"] = str(self.data_root)
+            try:
+                _write_local_config(self.local_config)
+            except Exception as exc:
+                self.logger.warning("No se pudo guardar la configuracion local: %s", exc)
 
         existing_course = self.course_combo.currentText().strip()
         self.course_combo.blockSignals(True)
@@ -1877,6 +1988,21 @@ class CastelCredCamQt(QMainWindow):
         self._sync_session_ui()
         self._refresh_course_view(force=True)
 
+    def _auto_load_default_roster(self) -> None:
+        if not self.default_roster_path:
+            return
+        loaded = self._load_roster_from_path(self.default_roster_path, persist=False, show_errors=False)
+        if loaded:
+            self.status_label.setText(f"Lista restaurada: {self.default_roster_path.name}")
+        else:
+            self.logger.warning("No se pudo restaurar la lista predeterminada: %s", self.default_roster_path)
+
+    def _photos_root(self) -> Path:
+        return self.data_root / PHOTOS_DIRNAME
+
+    def _backup_root(self) -> Path:
+        return self.data_root / BACKUP_PHOTOS_DIRNAME
+
     def _selected_course_for_session(self) -> str:
         text = self.course_combo.currentText().strip()
         return text or "SIN CURSO"
@@ -1884,8 +2010,8 @@ class CastelCredCamQt(QMainWindow):
     def start_session(self) -> None:
         course_display = self._selected_course_for_session()
         mode = "course" if self.course_radio.isChecked() else "test"
-        photos_root = APP_ROOT / PHOTOS_DIRNAME
-        backup_root = APP_ROOT / BACKUP_PHOTOS_DIRNAME
+        photos_root = self._photos_root()
+        backup_root = self._backup_root()
         photos_root.mkdir(parents=True, exist_ok=True)
         backup_root.mkdir(parents=True, exist_ok=True)
 
@@ -1958,7 +2084,7 @@ class CastelCredCamQt(QMainWindow):
         self._refresh_course_view(force=True)
 
     def open_photos_root(self) -> None:
-        open_folder(APP_ROOT / PHOTOS_DIRNAME)
+        open_folder(self._photos_root())
 
     def _apply_settings_to_frame(self, frame: np.ndarray, for_preview: bool = True) -> np.ndarray:
         transformed = frame.copy()
