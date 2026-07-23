@@ -160,7 +160,7 @@ CastelCredCam/
 
 En equipos de operación real, la GUI puede leer `local_config.json` para guardar las fotos fuera del repositorio, por ejemplo en `D:\Colegio\Fotos_Perfil_Estudiantes_Castel`, y cargar una nómina predeterminada al abrir. Ese archivo está ignorado por Git junto con `fotos/`, `fotos_respaldo/` y `auditoria_fotos/`, porque las fotos y datos de estudiantes no deben versionarse.
 
-## Instalación
+## Installation
 
 ```powershell
 cd C:\Users\Jack\Documents\GitHub\Experimentos\Castel\CastelCredCam
@@ -247,7 +247,7 @@ Tipos de cámara que suelen funcionar:
 - webcam USB.
 - cámara virtual desde celular con apps como Iriun, DroidCam, iVCam o Camo.
 
-## Requisitos
+## Prerequisites
 
 - Windows 10 u 11.
 - Python 3.10 o superior recomendado.
