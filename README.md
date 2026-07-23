@@ -135,7 +135,7 @@ Nombre Alumno-Curso-RUT.jpg
 
 Si no hay RUT, la app usa `SIN_RUT`.
 
-Eso permite reconstruir una carpeta aunque el CSV se corrompa o se necesite revisar a mano.
+Eso permite reconstruir una folder aunque el CSV se corrompa o se necesite revisar a mano.
 
 ## Estructura de salida
 
@@ -215,7 +215,7 @@ py .\camera_diagnostic.py
 
 ## Reintentos y respaldo
 
-El flujo de respaldo de las GUIs ocurre antes de ejecutar el postproceso y guarda la fuente completa sin recorte de credencial. Si al guardar ya existe un respaldo con el mismo nombre, la nueva copia usa el sufijo `__reintento_YYYYMMDD_HHMMSS`; en Qt, el botón de rehacer elimina primero el respaldo base.
+El flujo de respaldo de las GUIs ocurre antes de ejecutar el postproceso y guarda la fuente completa sin recorte de credencial. Si al guardar ya existe un respaldo con el mismo nombre, la nueva copia usa el sufijo `__reintento_YYYYMMDD_HHMMSS`; en Qt, el button de rehacer elimina primero el respaldo base.
 
 Al pulsar rehacer, la implementación actual difiere por interfaz:
 
@@ -264,7 +264,7 @@ Se ignoran normalmente:
 - `logs/`
 - caches de Python
 - entornos virtuales
-- archivos locales de editor y sistema
+- files locales de editor y sistema
 
 ## Notas de mejora
 
