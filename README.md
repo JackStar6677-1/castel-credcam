@@ -274,3 +274,5 @@ Más adelante se le puede sumar:
 - un GIF corto del flujo de captura.
 - una tabla simple con cursos y salidas.
 - un diagrama más fino de la ruta de datos.
+
+<!-- Updated for 2026 active baseline maintenance -->
