@@ -1344,6 +1344,9 @@ class CastelCredCamQt(QMainWindow):
         self.status_label.setText(f"Esperando primer frame de camara... | {resolution_label}")
         self._show_preview_message("Esperando primer frame...")
         self.first_frame_timer.start(6000)
+        # The capture thread writes frames independently; start the GUI poller now.
+        # Previously it only started after opening a session, leaving a live camera blank.
+        self._schedule_preview_render(immediate=True)
 
     def _stop_camera_thread(self) -> bool:
         if self.camera_thread is None:

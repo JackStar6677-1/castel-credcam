@@ -1146,10 +1146,12 @@ def try_open_camera(
 
 def list_available_cameras(
     aliases: dict[tuple[int, str], str],
-    max_index: int = MAX_CAMERA_INDEX,
+    max_index: int = 4,
 ) -> List[Tuple[int, str, int, str, str]]:
     cameras: List[Tuple[int, str, int, str, str]] = []
+    consecutive_failures = 0
     for index in range(max_index):
+        found_any = False
         attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
         for backend_name, backend_id in attempts:
             capture, detected_backend_name, detected_backend_id = try_open_camera(index, backend_id)
@@ -1161,6 +1163,14 @@ def list_available_cameras(
             alias = get_camera_alias(aliases, index, detected_backend_id)
             capture.release()
             cameras.append((index, f"{alias} ({width}x{height})", detected_backend_id, detected_backend_name, alias))
+            found_any = True
+            break
+        if not found_any:
+            consecutive_failures += 1
+            if consecutive_failures >= 2 and index >= 2:
+                break
+        else:
+            consecutive_failures = 0
     cameras.sort(key=lambda item: (camera_priority(item[4], item[3]), item[0]))
     return cameras
 
