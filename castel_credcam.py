@@ -1126,7 +1126,7 @@ def try_open_camera(
         actual_width, actual_height = configure_capture(capture)
         frame = None
         ok = False
-        for _ in range(6):
+        for _ in range(20):
             with suppress_native_stderr():
                 ok, frame = capture.read()
             if ok and frame is not None and frame_looks_usable(frame):
@@ -1137,6 +1137,8 @@ def try_open_camera(
                     actual_width = frame.shape[1]
                     actual_height = frame.shape[0]
                 return capture, backend_name, backend_id
+            import time
+            time.sleep(0.03)
 
         capture.release()
     return None, None, None
