@@ -1,0 +1,4 @@
+# Herramientas de desarrollo. No se instalan en el equipo de captura.
+-r requirements.txt
+pytest>=8.0,<9
+ruff>=0.6,<1

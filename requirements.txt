@@ -1,4 +1,8 @@
 opencv-python>=4.10,<5
+# numpy se importa directamente en castel_credcam.py, castel_credcam_qt.py y
+# tools/audit_photo_quality.py. Hoy llega arrastrado por opencv-python, pero una
+# dependencia usada de forma explicita debe declararse de forma explicita.
+numpy>=1.26,<3
 Pillow>=10,<12
 openpyxl>=3.1,<4
 PySide6>=6.11,<7

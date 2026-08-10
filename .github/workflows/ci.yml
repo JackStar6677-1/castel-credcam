@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  calidad:
+    runs-on: windows-latest  # la app es solo Windows: backends DirectShow/MediaFoundation
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Pruebas (pytest)
+        run: python -m pytest tests
+
+      - name: Verificar que los modulos compilan
+        run: |
+          python -m py_compile castel_credcam.py photo_autoframe.py camera_diagnostic.py tools/audit_photo_quality.py
+          python -m py_compile GUI/castel_credcam_qt.py

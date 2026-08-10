@@ -1,0 +1,38 @@
+[project]
+name = "castel-credcam"
+version = "2026.8.0"
+description = "Captura de fotografia tipo credencial para el Colegio Castel Gandolfo"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+# Directorios que no son fuente del proyecto.
+exclude = [".venv", "venv", "__pycache__", "logs", "fotos", "fotos_respaldo", "auditoria_fotos"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes: nombres sin definir, imports/variables sin usar
+    "I",    # isort: orden de imports
+    "B",    # flake8-bugbear: fallos logicos frecuentes
+    "UP",   # pyupgrade: sintaxis moderna
+    "C4",   # comprehensions innecesarias
+    "SIM",  # simplificaciones
+]
+ignore = [
+    "E501",  # longitud de linea: el codigo heredado la excede; ruff format la corrige gradualmente
+    "B008",  # llamadas en valores por defecto: patron usado por argparse aqui
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Los tests importan miembros privados a proposito: es la logica pura que se valida.
+"tests/*" = ["SLF001"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+# Los directorios de fotos son junctions a almacenamiento externo. Si el destino
+# no esta montado, pytest falla al resolverlos durante la coleccion.
+norecursedirs = [".venv", "venv", "fotos", "fotos_respaldo", "auditoria_fotos", "logs", "camera_diagnostic"]
