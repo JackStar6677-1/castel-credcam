@@ -40,7 +40,6 @@ flowchart LR
 flowchart TB
     subgraph UI["Interfaz"]
         QT["GUI/castel_credcam_qt.py"]
-        TK["GUI/castel_credcam_gui.py"]
     end
 
     subgraph Core["Núcleo"]
@@ -56,9 +55,7 @@ flowchart TB
     end
 
     QT --> CORE
-    TK --> CORE
     QT --> AUTO
-    TK --> AUTO
     CORE --> PHOTOS
     CORE --> BACKUP
     CORE --> LOGS
@@ -101,13 +98,9 @@ GUI principal recomendada para uso diario. Incluye:
 - respaldo espejo por curso.
 - reencuadre postfoto asincrónico con log de diagnóstico.
 
-### `GUI/castel_credcam_gui.py`
-
-Variante legacy mantenida por compatibilidad interna. También ejecuta el reencuadre postfoto y conserva auditoría de reintentos en `retakes.csv`.
-
 ### `photo_autoframe.py`
 
-Postproceso invocado por las GUIs después de guardar y respaldar la toma. Genera un log `autoframe_*.log` por ejecución.
+Postproceso invocado por la GUI después de guardar y respaldar la toma. Genera un log `autoframe_*.log` por ejecución.
 
 ### `camera_diagnostic.py`
 
@@ -115,7 +108,7 @@ Utilidad independiente que captura imágenes de diagnóstico para verificar cám
 
 ## Reencuadre automático
 
-En las interfaces Qt y Tk, la foto no depende solo de cómo se vea el preview. La GUI guarda el JPG principal con los ajustes activos, crea un respaldo de la fuente completa sin recorte de credencial y ejecuta `photo_autoframe.py` en segundo plano sobre el JPG principal. El postproceso:
+En la interfaz Qt, la foto no depende solo de cómo se vea el preview. La GUI guarda el JPG principal con los ajustes activos, crea un respaldo de la fuente completa sin recorte de credencial y ejecuta `photo_autoframe.py` en segundo plano sobre el JPG principal. El postproceso:
 
 - busca candidatos de rostro y solo reemplaza la foto si confirma un par de ojos con separación y altura plausibles.
 - descarta candidatos bajos sin confirmación que suelen ser ropa o mobiliario.
@@ -158,12 +151,11 @@ CastelCredCam/
     `-- autoframe_YYYYMMDD_HHMMSS_PID.log
 ```
 
-En equipos de operación real, la GUI puede leer `local_config.json` para guardar las fotos fuera del repositorio, por ejemplo en `D:\Colegio\Fotos_Perfil_Estudiantes_Castel`, y cargar una nómina predeterminada al abrir. Ese archivo está ignorado por Git junto con `fotos/`, `fotos_respaldo/` y `auditoria_fotos/`, porque las fotos y datos de estudiantes no deben versionarse.
+En equipos de operación real, la GUI puede leer `local_config.json` para guardar las fotos fuera del repositorio, por ejemplo en `C:\Users\<usuario>\Documents\Colegio\Fotos_Perfil_Estudiantes_Castel`, y cargar una nómina predeterminada al abrir. Ese archivo está ignorado por Git junto con `fotos/`, `fotos_respaldo/` y `auditoria_fotos/`, porque las fotos y datos de estudiantes no deben versionarse.
 
 ## Instalación
 
 ```powershell
-cd C:\Users\Jack\Documents\GitHub\Experimentos\Castel\CastelCredCam
 py -m pip install -r requirements.txt
 ```
 
@@ -178,20 +170,19 @@ python -m pip install -r requirements.txt
 ### GUI principal
 
 ```powershell
-cd C:\Users\Jack\Documents\GitHub\Experimentos\Castel\CastelCredCam\GUI
+cd .\GUI
 py .\castel_credcam_qt.py
 ```
 
 O con:
 
 ```text
-GUI\run_castel_credcam_gui.bat
+GUI\run_castel_credcam_qt.bat
 ```
 
 ### Consola
 
 ```powershell
-cd C:\Users\Jack\Documents\GitHub\Experimentos\Castel\CastelCredCam
 py .\castel_credcam.py
 ```
 
@@ -215,14 +206,13 @@ py .\camera_diagnostic.py
 
 ## Reintentos y respaldo
 
-El flujo de respaldo de las GUIs ocurre antes de ejecutar el postproceso y guarda la fuente completa sin recorte de credencial. Si al guardar ya existe un respaldo con el mismo nombre, la nueva copia usa el sufijo `__reintento_YYYYMMDD_HHMMSS`; en Qt, el botón de rehacer elimina primero el respaldo base.
+El flujo de respaldo de la GUI ocurre antes de ejecutar el postproceso y guarda la fuente completa sin recorte de credencial. Si al guardar ya existe un respaldo con el mismo nombre, la nueva copia usa el sufijo `__reintento_YYYYMMDD_HHMMSS`; el botón de rehacer elimina primero el respaldo base.
 
-Al pulsar rehacer, la implementación actual difiere por interfaz:
+Al pulsar rehacer, la implementación difiere por interfaz:
 
 | Interfaz | Comportamiento actual de `Rehacer última` |
 | --- | --- |
 | Qt principal | elimina la foto vigente y su archivo de respaldo con el mismo nombre; actualiza el CSV. |
-| Tk legacy | elimina la foto vigente, mantiene los respaldos existentes y registra la acción en `retakes.csv`. |
 | Consola | al rehacer elimina el JPG vigente y registra `retakes.csv`; si luego se captura de nuevo el mismo nombre, su respaldo se reemplaza. |
 
 ## Mapa de módulos
@@ -232,9 +222,7 @@ graph TD
     A["castel_credcam.py"] --> B["Funciones compartidas: CSV, respaldo, cámara, autoframe"]
     A --> C["Captura por consola sin postproceso"]
     D["GUI/castel_credcam_qt.py"] --> A
-    E["GUI/castel_credcam_gui.py"] --> A
     D --> F["photo_autoframe.py"]
-    E --> F
     F --> G["JPG final + logs/autoframe_*.log"]
     H["camera_diagnostic.py"] --> I["Pruebas independientes de cámara"]
 ```
@@ -250,8 +238,25 @@ Tipos de cámara que suelen funcionar:
 ## Requisitos
 
 - Windows 10 u 11.
-- Python 3.10 o superior recomendado.
+- Python 3.12 o superior (el entorno de referencia es 3.12).
 - una cámara funcional en Windows.
+
+## Desarrollo
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+| Comando | Qué hace |
+| --- | --- |
+| `.\.venv\Scripts\python.exe -m pytest tests` | Ejecuta las pruebas de geometría del reencuadre. |
+| `.\.venv\Scripts\python.exe -m ruff check .` | Lint (pycodestyle, pyflakes, isort, bugbear, pyupgrade). |
+| `.\.venv\Scripts\python.exe -m ruff check . --fix` | Aplica las correcciones automáticas seguras. |
+
+Las mismas tres comprobaciones corren en CI (`.github/workflows/ci.yml`) sobre `windows-latest`, porque la app depende de los backends DirectShow y MediaFoundation.
+
+Las pruebas cubren la geometría pura del autoframe (`_autoframe_build_crop_box`, `_autoframe_score_face`, `_autoframe_box_iou`, `_autoframe_unique_candidates`). Es lógica sin cámara ni disco: un fallo ahí no lanza excepción, produce una tanda entera de credenciales mal recortadas. La captura en vivo y la GUI requieren hardware y se validan a mano.
 
 ## Seguridad y privacidad
 
