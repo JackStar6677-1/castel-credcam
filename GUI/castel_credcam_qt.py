@@ -1,22 +1,20 @@
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
-import logging
-import subprocess
 import sys
 import threading
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
 from openpyxl import load_workbook
-from PySide6.QtCore import QSignalBlocker, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QFont, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QSignalBlocker, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -27,16 +25,17 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QRadioButton,
-    QListWidget,
-    QListWidgetItem,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -45,9 +44,10 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QVBoxLayout,
     QWidget,
-    QHeaderView,
 )
 
+# La GUI vive en GUI/ pero importa el nucleo desde la raiz del repo, asi que la
+# ruta debe registrarse antes del import. De ahi el E402 silenciado abajo.
 APP_ROOT = Path(__file__).resolve().parent.parent
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
@@ -59,10 +59,10 @@ from castel_credcam import (  # noqa: E402
     TEST_FOLDER_NAME,
     PhotoRecord,
     append_csv_record,
-    build_photo_filename,
-    configure_capture,
     backend_key_from_id,
+    build_photo_filename,
     camera_source_kind,
+    configure_capture,
     ensure_photo_backup,
     get_logs_dir,
     list_available_cameras,
@@ -74,12 +74,11 @@ from castel_credcam import (  # noqa: E402
     open_folder,
     rewrite_csv,
     sanitize_folder_name,
-    save_last_camera,
     save_camera_resolution,
+    save_last_camera,
     setup_logging,
     silence_opencv_logs,
 )
-
 
 APP_TITLE = "CastelCredCam Studio"
 WINDOW_BG = "#141317"
@@ -167,7 +166,7 @@ def _detect_data_root(config: dict[str, object]) -> Path:
     return APP_ROOT
 
 
-def _detect_default_roster(config: dict[str, object]) -> Optional[Path]:
+def _detect_default_roster(config: dict[str, object]) -> Path | None:
     configured = config.get("default_roster")
     if isinstance(configured, str) and configured.strip():
         path = Path(configured)
@@ -211,7 +210,7 @@ def _display_name_from_parts(
     return name or full_name.strip()
 
 
-def _sort_key(student: "RosterStudent") -> tuple[str, str, str, str, str]:
+def _sort_key(student: RosterStudent) -> tuple[str, str, str, str, str]:
     return (
         _normalize_text(student.apellido_paterno),
         _normalize_text(student.apellido_materno),
@@ -332,20 +331,20 @@ class SessionState:
     def roster_remaining(self) -> int:
         return max(0, len(self.roster_students) - min(self.roster_index, len(self.roster_students)))
 
-    def current_student(self) -> Optional[RosterStudent]:
+    def current_student(self) -> RosterStudent | None:
         if not self.roster_students:
             return None
         if self.roster_index < 0 or self.roster_index >= len(self.roster_students):
             return None
         return self.roster_students[self.roster_index]
 
-    def advance(self) -> Optional[RosterStudent]:
+    def advance(self) -> RosterStudent | None:
         if not self.roster_students:
             return None
         self.roster_index = min(self.roster_index + 1, len(self.roster_students))
         return self.current_student()
 
-    def retreat(self) -> Optional[RosterStudent]:
+    def retreat(self) -> RosterStudent | None:
         if not self.roster_students:
             return None
         self.roster_index = max(0, self.roster_index - 1)
@@ -361,16 +360,16 @@ class CameraThread(QThread):
         self,
         camera_index: int,
         backend_id: int,
-        preferred_resolution: Optional[tuple[int, int]] = None,
-        parent: Optional[QWidget] = None,
+        preferred_resolution: tuple[int, int] | None = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.camera_index = camera_index
         self.backend_id = backend_id
         self.preferred_resolution = preferred_resolution
-        self._capture: Optional[cv2.VideoCapture] = None
+        self._capture: cv2.VideoCapture | None = None
         self._frame_lock = threading.Lock()
-        self._latest_frame: Optional[np.ndarray] = None
+        self._latest_frame: np.ndarray | None = None
 
     def run(self) -> None:
         try:
@@ -413,13 +412,11 @@ class CameraThread(QThread):
             self.camera_error.emit(str(exc))
         finally:
             if self._capture is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._capture.release()
-                except Exception:
-                    pass
                 self._capture = None
 
-    def latest_frame(self) -> Optional[np.ndarray]:
+    def latest_frame(self) -> np.ndarray | None:
         with self._frame_lock:
             if self._latest_frame is None:
                 return None
@@ -428,10 +425,8 @@ class CameraThread(QThread):
     def stop(self) -> None:
         self.requestInterruption()
         if self._capture is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._capture.release()
-            except Exception:
-                pass
 
 
 class CastelCredCamQt(QMainWindow):
@@ -464,23 +459,23 @@ class CastelCredCamQt(QMainWindow):
         self.backend_id = cv2.CAP_ANY
         self.backend_name = "Automatico"
         self.camera_alias = ""
-        self.camera_resolution: Optional[tuple[int, int]] = None
-        self.camera_thread: Optional[CameraThread] = None
-        self.latest_frame: Optional[np.ndarray] = None
+        self.camera_resolution: tuple[int, int] | None = None
+        self.camera_thread: CameraThread | None = None
+        self.latest_frame: np.ndarray | None = None
         self.frame_counter = 0
-        self.current_face_box: Optional[tuple[int, int, int, int]] = None
+        self.current_face_box: tuple[int, int, int, int] | None = None
         self.current_eye_centers: list[tuple[int, int]] = []
-        self.current_crop_box: Optional[tuple[int, int, int, int]] = None
-        self.stable_crop_box: Optional[tuple[int, int, int, int]] = None
-        self.preview_stable_crop_box: Optional[tuple[int, int, int, int]] = None
-        self.preview_face_box: Optional[tuple[int, int, int, int]] = None
+        self.current_crop_box: tuple[int, int, int, int] | None = None
+        self.stable_crop_box: tuple[int, int, int, int] | None = None
+        self.preview_stable_crop_box: tuple[int, int, int, int] | None = None
+        self.preview_face_box: tuple[int, int, int, int] | None = None
         self.preview_eye_centers: list[tuple[int, int]] = []
         self.preview_detection_tick = 0
         self.last_face_detect_frame = -9999
         self.crop_manual_dx = 0.0
         self.crop_manual_dy = 0.0
         self.crop_manual_zoom = 1.0
-        self.pending_capture_identity: Optional[tuple[str, str, Optional[int]]] = None
+        self.pending_capture_identity: tuple[str, str, int | None] | None = None
         self.face_cascades = [
             cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml"),
             cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_alt2.xml"),
@@ -491,7 +486,7 @@ class CastelCredCamQt(QMainWindow):
             cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml"),
             cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml"),
         ]
-        self.session: Optional[SessionState] = None
+        self.session: SessionState | None = None
         self.roster_map: dict[str, list[RosterStudent]] = {}
         self.roster_order: list[str] = []
         self.preview_index_by_course: dict[str, int] = {}
@@ -517,7 +512,7 @@ class CastelCredCamQt(QMainWindow):
         self._preview_frame_received = False
         self._auto_camera_failures: set[tuple[int, int]] = set()
 
-        self.roster_source_path: Optional[Path] = None
+        self.roster_source_path: Path | None = None
         self.roster_status_text = "Carga una lista para avanzar por curso."
 
         self.mode = "test"
@@ -1221,13 +1216,13 @@ class CastelCredCamQt(QMainWindow):
         self.resolution_combo.setCurrentIndex(0)
         self.resolution_combo.blockSignals(False)
 
-    def _resolution_label(self, resolution: Optional[tuple[int, int]]) -> str:
+    def _resolution_label(self, resolution: tuple[int, int] | None) -> str:
         if resolution is None:
             return RESOLUTION_AUTO_LABEL
         width, height = resolution
         return f"{width} x {height}"
 
-    def _resolution_from_combo_index(self, combo_index: int) -> Optional[tuple[int, int]]:
+    def _resolution_from_combo_index(self, combo_index: int) -> tuple[int, int] | None:
         if combo_index < 0:
             return None
         data = self.resolution_combo.itemData(combo_index)
@@ -1237,7 +1232,7 @@ class CastelCredCamQt(QMainWindow):
                 return int(width), int(height)
         return None
 
-    def _current_selected_resolution(self) -> Optional[tuple[int, int]]:
+    def _current_selected_resolution(self) -> tuple[int, int] | None:
         return self._resolution_from_combo_index(self.resolution_combo.currentIndex())
 
     def _select_default_camera(self) -> None:
@@ -1384,7 +1379,7 @@ class CastelCredCamQt(QMainWindow):
         self.preview_label.setText(message)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-    def _pull_latest_preview_frame(self) -> Optional[np.ndarray]:
+    def _pull_latest_preview_frame(self) -> np.ndarray | None:
         if self.camera_thread is None:
             return self.latest_frame
         frame = self.camera_thread.latest_frame()
@@ -1535,7 +1530,7 @@ class CastelCredCamQt(QMainWindow):
         course = self._active_course_text()
         self.preview_index_by_course[course] = index
 
-    def _current_student(self) -> Optional[RosterStudent]:
+    def _current_student(self) -> RosterStudent | None:
         students = self._active_students()
         if not students:
             return None
@@ -1680,26 +1675,18 @@ class CastelCredCamQt(QMainWindow):
 
                 row = self.course_table.rowCount()
                 self.course_table.insertRow(row)
+                # Un unico setBackground por celda, con el color de la paleta que
+                # ya se decidio arriba. Antes se pintaba tres veces (transparente,
+                # negro y un Qt.GlobalColor saturado) y las constantes del tema
+                # quedaban sin usar, rompiendo la coherencia visual del modo oscuro.
                 for column, value in enumerate((state, student.display_name, student.rut or "-")):
                     item = QTableWidgetItem(value)
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    item.setBackground(Qt.GlobalColor.transparent)
-                    self.course_table.setItem(row, column, item)
                     item.setForeground(Qt.GlobalColor.white)
+                    item.setBackground(QColor(background))
                     if column == 0:
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-                for column in range(3):
-                    item = self.course_table.item(row, column)
-                    if item is not None:
-                        item.setBackground(Qt.GlobalColor.black)
-                        # Apply custom colors through the row. Backgrounds are repeated intentionally.
-                        if state == "Hecho":
-                            item.setBackground(Qt.GlobalColor.darkGreen)
-                        elif state == "Actual":
-                            item.setBackground(Qt.GlobalColor.darkYellow)
-                        else:
-                            item.setBackground(Qt.GlobalColor.darkMagenta)
+                    self.course_table.setItem(row, column, item)
         finally:
             self.course_table.setUpdatesEnabled(True)
 
@@ -1880,7 +1867,7 @@ class CastelCredCamQt(QMainWindow):
             return {}
         return header_map
 
-    def _student_from_sequence(self, row: tuple[object, ...], header_map: dict[str, int]) -> Optional[RosterStudent]:
+    def _student_from_sequence(self, row: tuple[object, ...], header_map: dict[str, int]) -> RosterStudent | None:
         def cell(key: str) -> str:
             index = header_map.get(key)
             if index is None or index >= len(row):
@@ -1899,7 +1886,7 @@ class CastelCredCamQt(QMainWindow):
             return student
         return None
 
-    def _student_from_mapping(self, row: dict[str, object]) -> Optional[RosterStudent]:
+    def _student_from_mapping(self, row: dict[str, object]) -> RosterStudent | None:
         normalized = {_normalize_text(key): value for key, value in row.items()}
 
         def pick(*names: str) -> str:
@@ -2099,7 +2086,7 @@ class CastelCredCamQt(QMainWindow):
         self.current_face_box = face_box
 
         output = transformed
-        crop_box: Optional[tuple[int, int, int, int]] = None
+        crop_box: tuple[int, int, int, int] | None = None
         if self.crop_check.isChecked():
             crop_box = self._compute_portrait_crop_box(
                 transformed.shape[1],
@@ -2144,8 +2131,8 @@ class CastelCredCamQt(QMainWindow):
         self,
         width: int,
         height: int,
-        face_box: Optional[tuple[int, int, int, int]],
-        eye_centers: Optional[list[tuple[int, int]]] = None,
+        face_box: tuple[int, int, int, int] | None,
+        eye_centers: list[tuple[int, int]] | None = None,
     ) -> tuple[int, int, int, int]:
         target_ratio = 3 / 4
         max_crop_h = min(height, int(width / target_ratio))
@@ -2262,7 +2249,7 @@ class CastelCredCamQt(QMainWindow):
         self,
         frame: np.ndarray,
         crop_box: tuple[int, int, int, int],
-        output_size: Optional[tuple[int, int]] = (900, 1200),
+        output_size: tuple[int, int] | None = (900, 1200),
     ) -> np.ndarray:
         x1, y1, x2, y2 = crop_box
         crop = frame[y1:y2, x1:x2]
@@ -2272,10 +2259,7 @@ class CastelCredCamQt(QMainWindow):
             return crop.copy()
         crop_h, crop_w = crop.shape[:2]
         target_w, target_h = output_size
-        if target_w < crop_w or target_h < crop_h:
-            interpolation = cv2.INTER_AREA
-        else:
-            interpolation = cv2.INTER_CUBIC
+        interpolation = cv2.INTER_AREA if target_w < crop_w or target_h < crop_h else cv2.INTER_CUBIC
         return cv2.resize(crop, output_size, interpolation=interpolation)
 
     def _draw_context_guides(
@@ -2283,8 +2267,8 @@ class CastelCredCamQt(QMainWindow):
         frame: np.ndarray,
         source_width: int,
         source_height: int,
-        crop_box: Optional[tuple[int, int, int, int]],
-        face_box: Optional[tuple[int, int, int, int]],
+        crop_box: tuple[int, int, int, int] | None,
+        face_box: tuple[int, int, int, int] | None,
     ) -> None:
         height, width = frame.shape[:2]
         if crop_box is not None:
@@ -2311,7 +2295,7 @@ class CastelCredCamQt(QMainWindow):
         else:
             self._draw_guides(frame)
 
-    def _draw_face_anchor(self, frame: np.ndarray, crop_box: Optional[tuple[int, int, int, int]], face_box: tuple[int, int, int, int]) -> None:
+    def _draw_face_anchor(self, frame: np.ndarray, crop_box: tuple[int, int, int, int] | None, face_box: tuple[int, int, int, int]) -> None:
         if crop_box is None:
             x, y, w, h = face_box
             cv2.rectangle(frame, (x, y), (x + w, y + h), (244, 201, 93), 2)
@@ -2504,7 +2488,7 @@ class CastelCredCamQt(QMainWindow):
         frame: np.ndarray,
         update_state: bool = True,
         for_preview: bool = False,
-    ) -> Optional[tuple[int, int, int, int]]:
+    ) -> tuple[int, int, int, int] | None:
         if update_state and for_preview and self.frame_counter % 5 != 0:
             return self.current_face_box
         if not self.face_cascades or all(cascade.empty() for cascade in self.face_cascades):
@@ -2568,7 +2552,7 @@ class CastelCredCamQt(QMainWindow):
                 if candidate[0][1] + candidate[0][3] / 2 <= height * 0.62
             ]
 
-        best_face: Optional[tuple[int, int, int, int]] = None
+        best_face: tuple[int, int, int, int] | None = None
         best_eyes: list[tuple[int, int]] = []
         best_score = -1.0
         for (x, y, w, h), eyes in selection_pool:
@@ -2619,7 +2603,7 @@ class CastelCredCamQt(QMainWindow):
         # Calcular la caja de recorte para el preview basada en fallback centrado
         target_ratio = 3 / 4
         max_crop_h = min(height, int(width / target_ratio))
-        max_crop_w = int(max_crop_h * target_ratio)
+        int(max_crop_h * target_ratio)
         crop_h = int(max_crop_h * 0.82)
         crop_h = max(CROP_MIN_HEIGHT, crop_h)
         crop_w = int(crop_h * target_ratio)
@@ -2800,14 +2784,14 @@ class CastelCredCamQt(QMainWindow):
         name, rut, _roster_index = self._capture_identity_snapshot()
         return name, rut
 
-    def _capture_identity_snapshot(self) -> tuple[str, str, Optional[int]]:
+    def _capture_identity_snapshot(self) -> tuple[str, str, int | None]:
         if self.session and self.session.has_roster:
             current = self.session.current_student()
             if current is not None:
                 return current.display_name, current.rut, self.session.roster_index
         return self.student_edit.text().strip(), "", None
 
-    def _save_capture(self, frame: np.ndarray, capture_identity: Optional[tuple[str, str, Optional[int]]] = None) -> None:
+    def _save_capture(self, frame: np.ndarray, capture_identity: tuple[str, str, int | None] | None = None) -> None:
         if self.session is None:
             self.status_label.setText("Primero inicia una sesion.")
             self.logger.warning("Capture requested without active session.")
@@ -3019,7 +3003,7 @@ class CastelCredCamQt(QMainWindow):
                     self.post_progress_updated.emit(40, "Aplicando recorte manual")
                     target_ratio = 3 / 4
                     max_crop_h = min(height, int(width / target_ratio))
-                    max_crop_w = int(max_crop_h * target_ratio)
+                    int(max_crop_h * target_ratio)
                     crop_h = int(max_crop_h * 0.82)
                     crop_h = max(CROP_MIN_HEIGHT, crop_h)
                     crop_w = int(crop_h * target_ratio)
@@ -3046,7 +3030,7 @@ class CastelCredCamQt(QMainWindow):
                     self.post_progress_updated.emit(60, "Rostro no encontrado. Usando centrado")
                     target_ratio = 3 / 4
                     max_crop_h = min(height, int(width / target_ratio))
-                    max_crop_w = int(max_crop_h * target_ratio)
+                    int(max_crop_h * target_ratio)
                     crop_h = int(max_crop_h * 0.82)
                     crop_h = max(CROP_MIN_HEIGHT, crop_h)
                     crop_w = int(crop_h * target_ratio)
@@ -3122,7 +3106,7 @@ class CastelCredCamQt(QMainWindow):
         frame: np.ndarray,
         face_cascades,
         eye_cascades,
-    ) -> Optional[tuple[int, int, int, int]]:
+    ) -> tuple[int, int, int, int] | None:
         if not face_cascades or all(cascade.empty() for cascade in face_cascades):
             return None
         height, width = frame.shape[:2]
@@ -3169,7 +3153,7 @@ class CastelCredCamQt(QMainWindow):
                 if candidate[0][1] + candidate[0][3] / 2 <= height * 0.65
             ]
 
-        best_face: Optional[tuple[int, int, int, int]] = None
+        best_face: tuple[int, int, int, int] | None = None
         best_score = -1.0
         for (x, y, w, h), eyes in selection_pool:
             score = self._score_face_candidate((x, y, w, h), width, height, len(eyes))
