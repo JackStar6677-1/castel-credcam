@@ -14,7 +14,6 @@ from castel_credcam import (
     suppress_native_stderr,
 )
 
-
 BACKENDS = [
     ("DSHOW", cv2.CAP_DSHOW),
     ("MSMF", cv2.CAP_MSMF),

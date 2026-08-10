@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from castel_credcam import autoframe_photo_file, setup_logging

@@ -4,23 +4,21 @@ import argparse
 import csv
 import hashlib
 import itertools
-import logging
 import json
+import logging
 import os
 import re
+import shutil
 import sys
 import unicodedata
-import shutil
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-
 
 APP_TITLE = "CastelCredCam"
 WINDOW_NAME = "CastelCredCam Preview"
@@ -141,7 +139,7 @@ class SessionContext:
     session_dir: Path
     backup_dir: Path
     csv_path: Path
-    records: List[PhotoRecord]
+    records: list[PhotoRecord]
     session_started_at: datetime
 
     @property
@@ -154,10 +152,8 @@ class SessionContext:
 
 
 def silence_opencv_logs() -> None:
-    try:
+    with suppress(Exception):
         cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-    except Exception:
-        pass
 
 
 @contextmanager
@@ -181,7 +177,7 @@ def suppress_native_stderr():
             pass
 
 
-def load_last_camera(app_dir: Path) -> tuple[Optional[int], Optional[str]]:
+def load_last_camera(app_dir: Path) -> tuple[int | None, str | None]:
     path = app_dir / LAST_CAMERA_FILENAME
     if not path.exists():
         return None, None
@@ -206,7 +202,7 @@ def _camera_resolution_key(index: int, backend_key: str) -> str:
     return f"{index}:{backend_key.lower()}"
 
 
-def load_camera_resolution(app_dir: Path, index: int, backend_key: str) -> Optional[tuple[int, int]]:
+def load_camera_resolution(app_dir: Path, index: int, backend_key: str) -> tuple[int, int] | None:
     path = app_dir / CAMERA_RESOLUTION_FILENAME
     if not path.exists():
         return None
@@ -228,7 +224,7 @@ def load_camera_resolution(app_dir: Path, index: int, backend_key: str) -> Optio
     return width, height
 
 
-def save_camera_resolution(app_dir: Path, index: int, backend_key: str, resolution: Optional[tuple[int, int]]) -> None:
+def save_camera_resolution(app_dir: Path, index: int, backend_key: str, resolution: tuple[int, int] | None) -> None:
     path = app_dir / CAMERA_RESOLUTION_FILENAME
     payload: dict[str, dict[str, int]] = {}
     if path.exists():
@@ -406,11 +402,11 @@ def ask_mode() -> str:
         print("Opcion invalida. Escribe 1 o 2.")
 
 
-def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
+def load_existing_records(csv_path: Path) -> list[PhotoRecord]:
     if not csv_path.exists():
         return []
 
-    records: List[PhotoRecord] = []
+    records: list[PhotoRecord] = []
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
@@ -427,7 +423,7 @@ def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
                 )
             except (KeyError, TypeError, ValueError):
                 continue
-    deduped: List[PhotoRecord] = []
+    deduped: list[PhotoRecord] = []
     seen_keys: set[tuple[str, str, str, str, str]] = set()
     for record in records:
         key = _photo_record_key(record)
@@ -442,10 +438,7 @@ def load_existing_records(csv_path: Path) -> List[PhotoRecord]:
 def image_signature(frame: np.ndarray) -> int:
     if frame is None or getattr(frame, "size", 0) == 0:
         return 0
-    if len(frame.shape) == 3:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = frame.copy()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame.copy()
     small = cv2.resize(gray, (9, 8), interpolation=cv2.INTER_AREA)
     diff = small[:, 1:] > small[:, :-1]
     signature = 0
@@ -454,7 +447,7 @@ def image_signature(frame: np.ndarray) -> int:
     return signature
 
 
-def image_signature_from_path(image_path: Path) -> Optional[int]:
+def image_signature_from_path(image_path: Path) -> int | None:
     if not image_path.exists():
         return None
     image = cv2.imread(str(image_path))
@@ -467,7 +460,7 @@ def image_signature_distance(left: int, right: int) -> int:
     return (left ^ right).bit_count()
 
 
-def image_fingerprint(frame: np.ndarray) -> Optional[str]:
+def image_fingerprint(frame: np.ndarray) -> str | None:
     if frame is None or getattr(frame, "size", 0) == 0:
         return None
     ok, encoded = cv2.imencode(".jpg", frame)
@@ -476,7 +469,7 @@ def image_fingerprint(frame: np.ndarray) -> Optional[str]:
     return hashlib.sha256(encoded.tobytes()).hexdigest()
 
 
-def image_fingerprint_from_path(image_path: Path) -> Optional[str]:
+def image_fingerprint_from_path(image_path: Path) -> str | None:
     if not image_path.exists():
         return None
     try:
@@ -487,9 +480,9 @@ def image_fingerprint_from_path(image_path: Path) -> Optional[str]:
 
 def find_similar_record(
     frame: np.ndarray,
-    records: List[PhotoRecord],
+    records: list[PhotoRecord],
     session_dir: Path,
-) -> Optional[PhotoRecord]:
+) -> PhotoRecord | None:
     target_fingerprint = image_fingerprint(frame)
     if target_fingerprint is None:
         return None
@@ -511,12 +504,9 @@ def record_identity_key(student_name: str, course: str, rut: str = "") -> tuple[
     )
 
 
-def has_record_for_student(records: List[PhotoRecord], student_name: str, course: str, rut: str = "") -> bool:
+def has_record_for_student(records: list[PhotoRecord], student_name: str, course: str, rut: str = "") -> bool:
     target_key = record_identity_key(student_name, course, rut)
-    for record in records:
-        if record_identity_key(record.student_name, record.course, record.rut) == target_key:
-            return True
-    return False
+    return any(record_identity_key(record.student_name, record.course, record.rut) == target_key for record in records)
 
 
 def ensure_csv_exists(csv_path: Path) -> None:
@@ -534,7 +524,7 @@ def append_csv_record(csv_path: Path, record: PhotoRecord) -> None:
         writer.writerow([record.id, record.filename, record.student_name, record.course, record.rut, record.timestamp])
 
 
-def rewrite_csv(csv_path: Path, records: List[PhotoRecord]) -> None:
+def rewrite_csv(csv_path: Path, records: list[PhotoRecord]) -> None:
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["id", "filename", "student_name", "course", "rut", "timestamp"])
@@ -569,10 +559,8 @@ def initialize_session(app_dir: Path) -> SessionContext:
     backup_dir.mkdir(parents=True, exist_ok=True)
     csv_path = session_dir / CSV_FILENAME
     ensure_csv_exists(csv_path)
-    try:
+    with suppress(Exception):
         shutil.copy2(csv_path, backup_dir / CSV_FILENAME)
-    except Exception:
-        pass
     records = load_existing_records(csv_path)
 
     print("\nSesion lista:")
@@ -603,13 +591,11 @@ def open_camera(index: int, backend: int = cv2.CAP_ANY) -> cv2.VideoCapture:
 
 def configure_capture(
     capture: cv2.VideoCapture,
-    preferred_resolution: Optional[tuple[int, int]] = None,
+    preferred_resolution: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     if sys.platform.startswith("win"):
-        try:
+        with suppress(Exception):
             capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        except Exception:
-            pass
 
     preferred_sequence = list(PREFERRED_CAMERA_RESOLUTIONS)
     if preferred_resolution is not None:
@@ -621,10 +607,8 @@ def configure_capture(
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, target_width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, target_height)
         capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
-        try:
+        with suppress(Exception):
             capture.set(cv2.CAP_PROP_FPS, 30)
-        except Exception:
-            pass
 
         actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
@@ -632,14 +616,12 @@ def configure_capture(
             break
 
     capture.set(cv2.CAP_PROP_CONVERT_RGB, 1)
-    try:
+    with suppress(Exception):
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    except Exception:
-        pass
     return actual_width, actual_height
 
 
-def frame_stats(frame) -> Tuple[float, float]:
+def frame_stats(frame) -> tuple[float, float]:
     mean_value = float(frame.mean())
     std_value = float(frame.std())
     return mean_value, std_value
@@ -649,9 +631,7 @@ def frame_looks_usable(frame) -> bool:
     mean_value, std_value = frame_stats(frame)
     if mean_value < 1.0 and std_value < 1.0:
         return False
-    if std_value < MIN_FRAME_STD:
-        return False
-    return True
+    return not std_value < MIN_FRAME_STD
 
 
 @lru_cache(maxsize=1)
@@ -824,10 +804,10 @@ def _autoframe_collect_candidates(
 def _autoframe_select_verified_face(
     frame: np.ndarray,
     candidates: list[tuple[int, int, int, int]],
-    diagnostic_logger: Optional[logging.Logger],
+    diagnostic_logger: logging.Logger | None,
     phase: str,
     max_candidates: int,
-) -> Optional[tuple[int, int, int, int]]:
+) -> tuple[int, int, int, int] | None:
     """Return only a face backed by a plausible two-eye detection."""
     height, width = frame.shape[:2]
     if not candidates:
@@ -896,8 +876,8 @@ def _autoframe_select_verified_face(
 
 def _autoframe_detect_face(
     frame: np.ndarray,
-    diagnostic_logger: Optional[logging.Logger] = None,
-) -> Optional[tuple[int, int, int, int]]:
+    diagnostic_logger: logging.Logger | None = None,
+) -> tuple[int, int, int, int] | None:
     if frame.size == 0:
         if diagnostic_logger is not None:
             diagnostic_logger.warning("Autoframe decision: frame vacio, se omite deteccion.")
@@ -945,8 +925,8 @@ def _autoframe_detect_face(
 def _autoframe_build_crop_box(
     width: int,
     height: int,
-    face_box: Optional[tuple[int, int, int, int]],
-    eye_centers: Optional[list[tuple[int, int]]] = None,
+    face_box: tuple[int, int, int, int] | None,
+    eye_centers: list[tuple[int, int]] | None = None,
 ) -> tuple[int, int, int, int]:
     target_ratio = 3 / 4
     max_crop_h = min(height, int(width / target_ratio))
@@ -1042,8 +1022,8 @@ def _autoframe_crop_frame(frame: np.ndarray, crop_box: tuple[int, int, int, int]
 
 def autoframe_photo_file(
     image_path: Path,
-    backup_path: Optional[Path] = None,
-    diagnostic_logger: Optional[logging.Logger] = None,
+    backup_path: Path | None = None,
+    diagnostic_logger: logging.Logger | None = None,
 ) -> tuple[bool, str]:
     try:
         image = cv2.imread(str(image_path))
@@ -1111,8 +1091,8 @@ def autoframe_photo_file(
 
 def try_open_camera(
     index: int,
-    backend_id: Optional[int] = None,
-) -> Tuple[Optional[cv2.VideoCapture], Optional[str], Optional[int]]:
+    backend_id: int | None = None,
+) -> tuple[cv2.VideoCapture | None, str | None, int | None]:
     if backend_id is None:
         attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
     else:
@@ -1147,13 +1127,13 @@ def try_open_camera(
 def list_available_cameras(
     aliases: dict[tuple[int, str], str],
     max_index: int = 4,
-) -> List[Tuple[int, str, int, str, str]]:
-    cameras: List[Tuple[int, str, int, str, str]] = []
+) -> list[tuple[int, str, int, str, str]]:
+    cameras: list[tuple[int, str, int, str, str]] = []
     consecutive_failures = 0
     for index in range(max_index):
         found_any = False
         attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
-        for backend_name, backend_id in attempts:
+        for _backend_name, backend_id in attempts:
             capture, detected_backend_name, detected_backend_id = try_open_camera(index, backend_id)
             if capture is None or detected_backend_name is None or detected_backend_id is None:
                 continue
@@ -1178,9 +1158,9 @@ def list_available_cameras(
 def select_camera(
     aliases: dict[tuple[int, str], str],
     app_dir: Path,
-    preferred_index: Optional[int] = None,
-    preferred_backend: Optional[str] = None,
-) -> Tuple[int, int, str, str]:
+    preferred_index: int | None = None,
+    preferred_backend: str | None = None,
+) -> tuple[int, int, str, str]:
     cameras = list_available_cameras(aliases)
     if not cameras:
         raise RuntimeError("No se encontro ninguna camara disponible en Windows/OpenCV.")
@@ -1297,7 +1277,7 @@ def save_image(image, destination: Path) -> None:
         raise RuntimeError(f"No se pudo guardar la imagen en {destination}")
 
 
-def remove_last_record(session: SessionContext) -> Optional[PhotoRecord]:
+def remove_last_record(session: SessionContext) -> PhotoRecord | None:
     if not session.records:
         return None
 
@@ -1307,10 +1287,8 @@ def remove_last_record(session: SessionContext) -> Optional[PhotoRecord]:
         image_path.unlink()
     append_retake_audit(session.backup_dir, last_record, note="reintento")
     rewrite_csv(session.csv_path, session.records)
-    try:
+    with suppress(Exception):
         shutil.copy2(session.csv_path, session.backup_dir / CSV_FILENAME)
-    except Exception:
-        pass
     return last_record
 
 
@@ -1532,8 +1510,8 @@ def main() -> None:
     logger.info("Executable: %s", sys.executable)
     logger.info("CWD: %s", Path.cwd())
     logger.info("Args: %s", sys.argv[1:])
-    session: Optional[SessionContext] = None
-    session_report_path: Optional[Path] = None
+    session: SessionContext | None = None
+    session_report_path: Path | None = None
     args = parse_args()
     camera_aliases = load_camera_aliases(app_dir)
     print(f"{APP_TITLE} - Captura local de fotos tipo credencial")

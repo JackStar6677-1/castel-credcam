@@ -11,14 +11,13 @@ import argparse
 import csv
 import html
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 import cv2
 import numpy as np
-
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 DEFAULT_PHOTOS_DIR = "fotos"
