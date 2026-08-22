@@ -8,7 +8,10 @@ on:
 
 jobs:
   calidad:
-    runs-on: windows-latest  # la app es solo Windows: backends DirectShow/MediaFoundation
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,5 +31,5 @@ jobs:
 
       - name: Verificar que los modulos compilan
         run: |
-          python -m py_compile castel_credcam.py photo_autoframe.py camera_diagnostic.py tools/audit_photo_quality.py
+          python -m py_compile castel_credcam.py photo_autoframe.py camera_diagnostic.py tools/audit_photo_quality.py tools/audit_roster_coverage.py
           python -m py_compile GUI/castel_credcam_qt.py

@@ -8,7 +8,7 @@ CastelCredCam está pensada para jornadas reales de fotografía escolar: abrir c
 
 ## Vista rápida
 
-- Captura local en Windows, sin servicios externos.
+- Captura local en Windows o Linux, sin servicios externos obligatorios.
 - GUI principal en PySide6 para operación real con roster.
 - Flujo por consola para capturas rápidas sin roster ni autoframe postfoto.
 - Carga de nómina desde Excel o CSV.
@@ -180,6 +180,23 @@ O con:
 GUI\run_castel_credcam_qt.bat
 ```
 
+En Linux:
+
+```bash
+./run_castel_credcam_linux.sh
+```
+
+### Cámara del celular por Wi-Fi
+
+1. Conecta el computador y el celular a la misma red Wi-Fi.
+2. Inicia el servidor de video en una aplicación de cámara IP del celular.
+3. Copia la URL HTTP, HTTPS o RTSP que entrega la aplicación.
+4. En **Fuentes de video**, pega la URL y pulsa **Conectar cámara del celular**.
+
+La URL suele tener una forma como `http://192.168.1.50:8080/video`. CastelCredCam
+la recuerda localmente, pero no la incluye en Git. Si la dirección IP cambia, solo
+hay que reemplazarla en la interfaz.
+
 ### Consola
 
 ```powershell
@@ -234,10 +251,12 @@ Tipos de cámara que suelen funcionar:
 - webcam integrada.
 - webcam USB.
 - cámara virtual desde celular con apps como Iriun, DroidCam, iVCam o Camo.
+- cámara IP del celular mediante una URL HTTP, HTTPS o RTSP, por ejemplo
+  `http://192.168.1.50:8080/video`.
 
 ## Requisitos
 
-- Windows 10 u 11.
+- Windows 10/11 o una distribución Linux con entorno gráfico.
 - Python 3.12 o superior (el entorno de referencia es 3.12).
 - una cámara funcional en Windows.
 
@@ -254,7 +273,7 @@ py -m venv .venv
 | `.\.venv\Scripts\python.exe -m ruff check .` | Lint (pycodestyle, pyflakes, isort, bugbear, pyupgrade). |
 | `.\.venv\Scripts\python.exe -m ruff check . --fix` | Aplica las correcciones automáticas seguras. |
 
-Las mismas tres comprobaciones corren en CI (`.github/workflows/ci.yml`) sobre `windows-latest`, porque la app depende de los backends DirectShow y MediaFoundation.
+Las mismas tres comprobaciones corren en CI (`.github/workflows/ci.yml`) sobre Windows y Ubuntu. En Windows se usan DirectShow/MediaFoundation; en Linux, OpenCV/V4L2 o una URL de cámara IP.
 
 Las pruebas cubren la geometría pura del autoframe (`_autoframe_build_crop_box`, `_autoframe_score_face`, `_autoframe_box_iou`, `_autoframe_unique_candidates`). Es lógica sin cámara ni disco: un fallo ahí no lanza excepción, produce una tanda entera de credenciales mal recortadas. La captura en vivo y la GUI requieren hardware y se validan a mano.
 

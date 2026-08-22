@@ -584,7 +584,8 @@ def initialize_session(app_dir: Path) -> SessionContext:
     )
 
 
-def open_camera(index: int, backend: int = cv2.CAP_ANY) -> cv2.VideoCapture:
+def open_camera(index: int | str, backend: int = cv2.CAP_ANY) -> cv2.VideoCapture:
+    """Open a local camera index or a network video URL with OpenCV."""
     with suppress_native_stderr():
         return cv2.VideoCapture(index, backend)
 

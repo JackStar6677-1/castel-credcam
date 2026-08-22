@@ -9,6 +9,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -358,7 +359,7 @@ class CameraThread(QThread):
 
     def __init__(
         self,
-        camera_index: int,
+        camera_index: int | str,
         backend_id: int,
         preferred_resolution: tuple[int, int] | None = None,
         parent: QWidget | None = None,
@@ -456,6 +457,8 @@ class CastelCredCamQt(QMainWindow):
         self.available_cameras: list[tuple[int, str, int, str, str]] = []
         self._camera_scan_running = False
         self.camera_index = 0
+        configured_camera_url = self.local_config.get("camera_url")
+        self.camera_url = configured_camera_url.strip() if isinstance(configured_camera_url, str) else ""
         self.backend_id = cv2.CAP_ANY
         self.backend_name = "Automatico"
         self.camera_alias = ""
@@ -801,7 +804,7 @@ class CastelCredCamQt(QMainWindow):
         camera_layout.setContentsMargins(10, 10, 10, 10)
         camera_layout.setSpacing(5)
         camera_layout.addWidget(self._card_title("Fuentes de video"))
-        camera_layout.addWidget(self._muted_label("DroidCam, OBS Virtual Camera o webcam integrada"))
+        camera_layout.addWidget(self._muted_label("Camara IP del celular, DroidCam, OBS o webcam integrada"))
         self.source_status_label = self._muted_label("Refresca la lista si abres OBS o DroidCam despues de iniciar.")
         camera_layout.addWidget(self.source_status_label)
 
@@ -810,6 +813,16 @@ class CastelCredCamQt(QMainWindow):
         self.source_list.currentRowChanged.connect(self._on_source_selected)
         self.source_list.setMinimumHeight(92)
         camera_layout.addWidget(self.source_list)
+
+        camera_layout.addWidget(self._muted_label("URL de camara del celular (HTTP, HTTPS o RTSP)"))
+        self.camera_url_edit = QLineEdit(self.camera_url)
+        self.camera_url_edit.setPlaceholderText("Ej.: http://192.168.1.50:8080/video")
+        camera_layout.addWidget(self.camera_url_edit)
+
+        self.connect_phone_button = QPushButton("Conectar camara del celular")
+        self.connect_phone_button.setObjectName("GoldButton")
+        self.connect_phone_button.clicked.connect(self.connect_phone_camera)
+        camera_layout.addWidget(self.connect_phone_button)
 
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_selected)
@@ -1286,6 +1299,7 @@ class CastelCredCamQt(QMainWindow):
             return
         index, _label, backend_id, backend_name, alias = self.camera_choices[combo_index]
         self.camera_index = index
+        self.camera_url = ""
         self.backend_id = backend_id
         self.backend_name = backend_name
         self.camera_alias = alias
@@ -1305,7 +1319,7 @@ class CastelCredCamQt(QMainWindow):
         self._sync_resolution_combo(block_signals=True)
 
     def _start_camera_thread(self) -> None:
-        if not self.camera_choices:
+        if not self.camera_choices and not self.camera_url:
             self._show_preview_message("No hay camara disponible.")
             return
         if not self._stop_camera_thread():
@@ -1325,13 +1339,14 @@ class CastelCredCamQt(QMainWindow):
             backend_key_from_id(self.backend_id),
             selected_resolution,
         )
-        self.camera_thread = CameraThread(self.camera_index, self.backend_id, selected_resolution, self)
+        camera_source: int | str = self.camera_url or self.camera_index
+        self.camera_thread = CameraThread(camera_source, self.backend_id, selected_resolution, self)
         self.camera_thread.camera_message.connect(self._on_camera_message)
         self.camera_thread.camera_error.connect(self._on_camera_error)
         self.camera_thread.start()
         self.logger.info(
             "Camera thread started index=%s backend=%s resolution=%s",
-            self.camera_index,
+            camera_source,
             self.backend_name,
             selected_resolution,
         )
@@ -1342,6 +1357,35 @@ class CastelCredCamQt(QMainWindow):
         # The capture thread writes frames independently; start the GUI poller now.
         # Previously it only started after opening a session, leaving a live camera blank.
         self._schedule_preview_render(immediate=True)
+
+    def connect_phone_camera(self) -> None:
+        """Persist and start an IP-camera stream supplied by the phone app."""
+        camera_url = self.camera_url_edit.text().strip()
+        parsed = urlparse(camera_url)
+        if parsed.scheme.lower() not in {"http", "https", "rtsp"} or not parsed.netloc:
+            QMessageBox.warning(
+                self,
+                "URL de camara no valida",
+                "Usa una URL completa HTTP, HTTPS o RTSP.\nEjemplo: http://192.168.1.50:8080/video",
+            )
+            return
+
+        self.camera_url = camera_url
+        self.backend_id = cv2.CAP_ANY
+        self.backend_name = "Camara IP"
+        self.camera_alias = "Celular"
+        self.local_config["camera_url"] = camera_url
+        self.local_config["data_root"] = str(self.data_root)
+        if self.default_roster_path is not None:
+            self.local_config["default_roster"] = str(self.default_roster_path)
+        try:
+            _write_local_config(self.local_config)
+        except Exception as exc:
+            self.logger.warning("No se pudo guardar la URL de la camara: %s", exc)
+
+        self.source_status_label.setText(f"Conectando camara IP del celular: {parsed.hostname}")
+        self.logger.info("Phone camera selected: scheme=%s host=%s", parsed.scheme, parsed.hostname)
+        self._start_camera_thread()
 
     def _stop_camera_thread(self) -> bool:
         if self.camera_thread is None:
@@ -1439,7 +1483,10 @@ class CastelCredCamQt(QMainWindow):
         self.available_cameras = cameras
         self.logger.info("Camera scan finished. cameras=%s", len(cameras))
         self._load_camera_choices()
-        self._select_default_camera()
+        if self.camera_url:
+            self.connect_phone_camera()
+        else:
+            self._select_default_camera()
 
     def refresh_sources(self) -> None:
         self.aliases = load_camera_aliases(APP_ROOT)
@@ -1858,13 +1905,29 @@ class CastelCredCamQt(QMainWindow):
                 header_map["segundo_nombre"] = index
             elif "primer nombre" in text or text in {"primernombre"}:
                 header_map["primer_nombre"] = index
-            elif text in {"nombre", "nombres", "alumno", "estudiante"} or "nombre completo" in text:
+            elif (
+                text in {"nombre", "nombres", "alumno", "estudiante"}
+                or "nombre completo" in text
+                or "nombre estudiante" in text
+            ):
                 header_map.setdefault("full_name", index)
             elif "curso" in text:
                 header_map.setdefault("course", index)
 
         if "rut" not in header_map and "full_name" not in header_map and "primer_nombre" not in header_map:
             return {}
+        # Algunas nominas antiguas muestran un unico encabezado combinado
+        # "NOMBRE ESTUDIANTES", pero los datos ocupan tres columnas consecutivas:
+        # apellido paterno, apellido materno y nombres. Se marca ese formato para
+        # no importar solamente el primer apellido como ocurria antes.
+        explicit_name_parts = {
+            "apellido_paterno",
+            "apellido_materno",
+            "segundo_nombre",
+            "primer_nombre",
+        }
+        if "full_name" in header_map and not explicit_name_parts.intersection(header_map):
+            header_map["legacy_name_start"] = header_map["full_name"]
         return header_map
 
     def _student_from_sequence(self, row: tuple[object, ...], header_map: dict[str, int]) -> RosterStudent | None:
@@ -1874,14 +1937,29 @@ class CastelCredCamQt(QMainWindow):
                 return ""
             return str(row[index]).strip() if row[index] is not None else ""
 
-        student = RosterStudent(
-            rut=cell("rut"),
-            apellido_paterno=cell("apellido_paterno"),
-            apellido_materno=cell("apellido_materno"),
-            segundo_nombre=cell("segundo_nombre"),
-            primer_nombre=cell("primer_nombre"),
-            full_name=cell("full_name"),
-        )
+        legacy_name_start = header_map.get("legacy_name_start")
+        if legacy_name_start is not None:
+            def legacy_cell(offset: int) -> str:
+                index = legacy_name_start + offset
+                if index >= len(row) or row[index] is None:
+                    return ""
+                return str(row[index]).strip()
+
+            student = RosterStudent(
+                rut=cell("rut"),
+                apellido_paterno=legacy_cell(0),
+                apellido_materno=legacy_cell(1),
+                primer_nombre=legacy_cell(2),
+            )
+        else:
+            student = RosterStudent(
+                rut=cell("rut"),
+                apellido_paterno=cell("apellido_paterno"),
+                apellido_materno=cell("apellido_materno"),
+                segundo_nombre=cell("segundo_nombre"),
+                primer_nombre=cell("primer_nombre"),
+                full_name=cell("full_name"),
+            )
         if student.display_name or student.rut:
             return student
         return None
