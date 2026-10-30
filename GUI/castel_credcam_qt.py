@@ -927,15 +927,29 @@ class CastelCredCamQt(QMainWindow):
         capture_layout.addLayout(btn_row)
 
         btn_row2 = QHBoxLayout()
+        self.prev_student_button = QPushButton("◀ Anterior")
+        self.prev_student_button.setObjectName("GoldButton")
+        self.prev_student_button.setToolTip("Retroceder al alumno anterior en la lista (Atajo: Ctrl+Z)")
+        self.prev_student_button.clicked.connect(self._on_retreat_student_clicked)
+        btn_row2.addWidget(self.prev_student_button)
+
+        self.skip_student_button = QPushButton("Ausente / Saltar ▶")
+        self.skip_student_button.setObjectName("GoldButton")
+        self.skip_student_button.setToolTip("Avanzar sin tomar foto (marcar ausente) para evitar desfasar la lista (Atajo: Ctrl+S)")
+        self.skip_student_button.clicked.connect(self._on_skip_student_clicked)
+        btn_row2.addWidget(self.skip_student_button)
+        capture_layout.addLayout(btn_row2)
+
+        btn_row3 = QHBoxLayout()
         self.retake_button = QPushButton("Rehacer ultima")
         self.retake_button.setObjectName("GoldButton")
         self.retake_button.clicked.connect(self.retake_last)
-        btn_row2.addWidget(self.retake_button)
+        btn_row3.addWidget(self.retake_button)
         self.close_session_button = QPushButton("Cerrar sesion")
         self.close_session_button.setObjectName("DangerButton")
         self.close_session_button.clicked.connect(self.close_session)
-        btn_row2.addWidget(self.close_session_button)
-        capture_layout.addLayout(btn_row2)
+        btn_row3.addWidget(self.close_session_button)
+        capture_layout.addLayout(btn_row3)
         # Definición de recientes e info cards antes de agruparlas en pestañas
         self.recent_card = self._make_card()
         recent_layout = QVBoxLayout(self.recent_card)
@@ -1612,6 +1626,39 @@ class CastelCredCamQt(QMainWindow):
             if self.session.roster_index >= self.session.roster_total:
                 return
             self.session.advance()
+    def _on_skip_student_clicked(self) -> None:
+        """Avanza al siguiente alumno sin capturar foto (para alumnos ausentes o que salieron de la fila)."""
+        students = self._active_students()
+        if not students:
+            return
+        idx = self._active_index()
+        next_idx = min(idx + 1, len(students) - 1)
+        self._set_active_index(next_idx)
+        current = students[next_idx]
+        if self.session and self.session.has_roster:
+            self.session.roster_index = next_idx
+            self.student_edit.setText(current.display_name)
+        self.status_label.setText(f"Ausente/Saltado. Ahora en: {current.display_name}")
+        self._sync_session_ui()
+        self._refresh_course_view(force=True)
+        self._render_preview()
+
+    def _on_retreat_student_clicked(self) -> None:
+        """Retrocede al alumno anterior en la lista."""
+        students = self._active_students()
+        if not students:
+            return
+        idx = self._active_index()
+        prev_idx = max(0, idx - 1)
+        self._set_active_index(prev_idx)
+        current = students[prev_idx]
+        if self.session and self.session.has_roster:
+            self.session.roster_index = prev_idx
+            self.student_edit.setText(current.display_name)
+        self.status_label.setText(f"Retrocedido a: {current.display_name}")
+        self._sync_session_ui()
+        self._refresh_course_view(force=True)
+        self._render_preview()
 
     def _on_course_row_clicked(self, row: int, _column: int) -> None:
         students = self._active_students()
@@ -1661,10 +1708,24 @@ class CastelCredCamQt(QMainWindow):
 
     def _session_completed_keys(self) -> set[tuple[str, str]]:
         keys: set[tuple[str, str]] = set()
-        if not self.session:
-            return keys
-        for record in self.session.records:
-            keys.add(_student_key(record.student_name, record.rut))
+        if self.session:
+            for record in self.session.records:
+                keys.add(_student_key(record.student_name, record.rut))
+        
+        # Cruzar con las fotos reales existentes en el disco (fotos_gptsofia_listas o fotos/)
+        # para que la tabla y la barra muestren el progreso real de cada curso
+        try:
+            fotos_listas = self.data_root / "fotos_gptsofia_listas"
+            if not fotos_listas.is_dir():
+                fotos_listas = Path("/home/jack/Documentos/Colegio_Castel/Fotos_Perfil_Estudiantes_Castel/fotos_gptsofia_listas")
+            if fotos_listas.is_dir():
+                existing_ruts = {p.stem.strip().upper() for p in fotos_listas.glob("*.jpg")}
+                for student in self._active_students():
+                    clean_rut = _normalize_rut(student.rut)
+                    if clean_rut and clean_rut in existing_ruts:
+                        keys.add(student.key)
+        except Exception:
+            pass
         return keys
 
     def _reconcile_session_roster_progress(self) -> None:
@@ -1836,7 +1897,33 @@ class CastelCredCamQt(QMainWindow):
             return self._load_roster_from_workbook(path)
         if suffix in {".csv", ".tsv", ".txt"}:
             return self._load_roster_from_csv(path)
-        raise ValueError("Formato no soportado. Usa XLSX o CSV.")
+        if suffix in {".json"}:
+            return self._load_roster_from_json(path)
+        raise ValueError("Formato no soportado. Usa XLSX, CSV o JSON.")
+
+    def _load_roster_from_json(self, path: Path) -> dict[str, list[RosterStudent]]:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        grouped: dict[str, list[RosterStudent]] = {}
+        for course, student_list in data.items():
+            st_objs = []
+            for item in student_list:
+                name = item.get("nombre_completo", "").strip()
+                rut = item.get("rut", "").strip()
+                parts = name.split()
+                paterno = parts[0] if len(parts) > 0 else ""
+                materno = parts[1] if len(parts) > 1 else ""
+                nombres = " ".join(parts[2:]) if len(parts) > 2 else ""
+                st_objs.append(RosterStudent(
+                    rut=rut,
+                    apellido_paterno=paterno,
+                    apellido_materno=materno,
+                    segundo_nombre="",
+                    primer_nombre=nombres,
+                    full_name=name,
+                ))
+            grouped[course] = sorted(st_objs, key=_sort_key)
+        return grouped
 
     def _load_roster_from_workbook(self, path: Path) -> dict[str, list[RosterStudent]]:
         workbook = load_workbook(path, data_only=True, read_only=True)
@@ -1991,7 +2078,7 @@ class CastelCredCamQt(QMainWindow):
             self,
             "Seleccionar lista de alumnos",
             str(self._default_roster_dialog_dir()),
-            "Listas (*.xlsx *.xlsm *.csv *.tsv *.txt)",
+            "Listas (*.json *.xlsx *.xlsm *.csv *.tsv *.txt *.pdf)",
         )
         if not file_name:
             return
@@ -3098,33 +3185,39 @@ class CastelCredCamQt(QMainWindow):
                     self.autoframe_finished.emit(True, image_path.name)
                     return
 
-                self.post_progress_updated.emit(30, "Buscando rostro en la foto")
-                cascades = self.face_cascades
-                eye_cascades = self.eye_cascades
-                face_box = self._detect_primary_face_for_postprocessing(image, cascades, eye_cascades)
+                self.post_progress_updated.emit(30, "Buscando rostro con red neuronal YuNet")
+                from castel_credcam import _autoframe_detect_face_neural
+                neural_box, neural_eyes = _autoframe_detect_face_neural(image)
+                if neural_box is not None and len(neural_eyes) >= 2:
+                    face_box = neural_box
+                    eye_centers = neural_eyes
+                    self.post_progress_updated.emit(70, "Rostro confirmado con IA neuronal")
+                else:
+                    self.post_progress_updated.emit(40, "YuNet sin confirmacion. Usando Haar fallback")
+                    cascades = self.face_cascades
+                    eye_cascades = self.eye_cascades
+                    face_box = self._detect_primary_face_for_postprocessing(image, cascades, eye_cascades)
+                    if face_box is None:
+                        self.logger.warning("No se detecto rostro para %s. Aplicando recorte centrado fallback.", image_path.name)
+                        self.post_progress_updated.emit(60, "Rostro no encontrado. Usando centrado")
+                        target_ratio = 3 / 4
+                        max_crop_h = min(height, int(width / target_ratio))
+                        crop_h = int(max_crop_h * 0.82)
+                        crop_h = max(CROP_MIN_HEIGHT, crop_h)
+                        crop_w = int(crop_h * target_ratio)
+                        x1 = (width - crop_w) // 2
+                        y1 = (height - crop_h) // 2
+                        crop_box = (x1, y1, x1 + crop_w, y1 + crop_h)
+                        cropped = self._crop_frame_with_box(image, crop_box, output_size=(1500, 2000))
+                        cv2.imwrite(str(image_path), cropped)
+                        self.post_progress_updated.emit(100, "Rostro no encontrado (recorte centrado)")
+                        self.autoframe_finished.emit(True, f"{image_path.name} (Rostro no detectado, se aplico recorte centrado)")
+                        return
 
-                if face_box is None:
-                    self.logger.warning("No se detecto rostro para %s. Aplicando recorte centrado fallback.", image_path.name)
-                    self.post_progress_updated.emit(60, "Rostro no encontrado. Usando centrado")
-                    target_ratio = 3 / 4
-                    max_crop_h = min(height, int(width / target_ratio))
-                    int(max_crop_h * target_ratio)
-                    crop_h = int(max_crop_h * 0.82)
-                    crop_h = max(CROP_MIN_HEIGHT, crop_h)
-                    crop_w = int(crop_h * target_ratio)
-                    x1 = (width - crop_w) // 2
-                    y1 = (height - crop_h) // 2
-                    crop_box = (x1, y1, x1 + crop_w, y1 + crop_h)
-                    cropped = self._crop_frame_with_box(image, crop_box, output_size=(1500, 2000))
-                    cv2.imwrite(str(image_path), cropped)
-                    self.post_progress_updated.emit(100, "Rostro no encontrado (recorte centrado)")
-                    self.autoframe_finished.emit(True, f"{image_path.name} (Rostro no detectado, se aplico recorte centrado)")
-                    return
-
-                self.post_progress_updated.emit(60, "Rostro detectado. Buscando ojos")
-                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                gray = cv2.equalizeHist(gray)
-                eye_centers = self._detect_eyes_in_face(gray, face_box)
+                    self.post_progress_updated.emit(60, "Rostro detectado. Buscando ojos")
+                    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                    gray = cv2.equalizeHist(gray)
+                    eye_centers = self._detect_eyes_in_face(gray, face_box)
 
                 self.post_progress_updated.emit(80, "Calculando encuadre final")
                 crop_box = self._compute_portrait_crop_box(width, height, face_box, eye_centers)

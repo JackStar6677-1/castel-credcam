@@ -27,3 +27,13 @@ auditoria_fotos/
 last_camera.json
 camera_resolution.json
 local_config.json
+
+# Datos sensibles y nóminas institucionales (AGENTS.md Directiva Infranqueable)
+assets/nomina_*.json
+assets/*.json
+assets/*.onnx
+*.csv
+*.xlsx
+*.pdf
+alumnos_*.csv
+nomina_*.json

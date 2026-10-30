@@ -45,16 +45,17 @@ TEXT_FONT = cv2.FONT_HERSHEY_SIMPLEX
 TEXT_SCALE = 0.58
 TEXT_THICKNESS = 1
 TEXT_LINE = 21
+YUNET_MODEL_FILENAME = "face_detection_yunet_2023mar.onnx"
 AUTOFRAME_TARGET_SIZE = (1500, 2000)
 AUTOFRAME_MAX_DETECT_WIDTH = 1280
 AUTOFRAME_FAST_DETECT_WIDTH = 720
 AUTOFRAME_MIN_FACE_SIZE = 36
 AUTOFRAME_MIN_EYE_W = 12
 AUTOFRAME_MIN_EYE_H = 8
-AUTOFRAME_FACE_EXPANSION = 1.85
-AUTOFRAME_FACE_HEIGHT_RATIO = 0.60
-AUTOFRAME_EYE_TOP_RATIO = 0.24
-AUTOFRAME_HEADROOM_RATIO = 0.42
+AUTOFRAME_FACE_EXPANSION = 2.45
+AUTOFRAME_FACE_HEIGHT_RATIO = 0.65
+AUTOFRAME_EYE_TOP_RATIO = 0.38
+AUTOFRAME_HEADROOM_RATIO = 0.38
 AUTOFRAME_CHEST_MARGIN_RATIO = 0.10
 AUTOFRAME_FALLBACK_HEIGHT_RATIO = 0.82
 AUTOFRAME_MIN_EYE_SEPARATION_RATIO = 0.18
@@ -1021,6 +1022,69 @@ def _autoframe_crop_frame(frame: np.ndarray, crop_box: tuple[int, int, int, int]
     return cv2.resize(crop, output_size, interpolation=interpolation)
 
 
+_YUNET_DETECTOR = None
+
+
+def _get_yunet_detector(app_dir: Path | None = None) -> cv2.FaceDetectorYN | None:
+    global _YUNET_DETECTOR
+    if _YUNET_DETECTOR is not None:
+        return _YUNET_DETECTOR
+    if not hasattr(cv2, "FaceDetectorYN"):
+        return None
+    root = app_dir if app_dir is not None else Path(__file__).resolve().parent
+    model_path = root / "assets" / YUNET_MODEL_FILENAME
+    if not model_path.exists():
+        model_path = root.parent / "assets" / YUNET_MODEL_FILENAME
+    if not model_path.exists():
+        return None
+    try:
+        _YUNET_DETECTOR = cv2.FaceDetectorYN.create(
+            model=str(model_path),
+            config="",
+            input_size=(320, 320),
+            score_threshold=0.60,
+            nms_threshold=0.30,
+            top_k=10,
+        )
+        return _YUNET_DETECTOR
+    except Exception:
+        return None
+
+
+def _autoframe_detect_face_neural(
+    frame: np.ndarray,
+    diagnostic_logger: logging.Logger | None = None,
+) -> tuple[tuple[int, int, int, int] | None, list[tuple[int, int]]]:
+    """Detección neuronal de alta precisión con YuNet (Face Detection + Landmarks)."""
+    h, w = frame.shape[:2]
+    detector = _get_yunet_detector()
+    if detector is None:
+        return None, []
+    try:
+        detector.setInputSize((w, h))
+        _, faces = detector.detect(frame)
+        if faces is None or len(faces) == 0:
+            return None, []
+        best_face = max(faces, key=lambda f: float(f[-1]) * (float(f[2]) * float(f[3])))
+        score = float(best_face[-1])
+        if score < 0.55:
+            return None, []
+        fx, fy, fw, fh = int(best_face[0]), int(best_face[1]), int(best_face[2]), int(best_face[3])
+        re_x, re_y = int(best_face[4]), int(best_face[5])
+        le_x, le_y = int(best_face[6]), int(best_face[7])
+        eye_centers = [(re_x, re_y), (le_x, le_y)]
+        if diagnostic_logger is not None:
+            diagnostic_logger.info(
+                "Autoframe YuNet AI: rostro=%s ojos=%s score=%.3f.",
+                (fx, fy, fw, fh), eye_centers, score
+            )
+        return (fx, fy, fw, fh), eye_centers
+    except Exception as exc:
+        if diagnostic_logger is not None:
+            diagnostic_logger.warning("Autoframe YuNet exception: %s. Usando Haar fallback.", exc)
+        return None, []
+
+
 def autoframe_photo_file(
     image_path: Path,
     backup_path: Path | None = None,
@@ -1047,9 +1111,19 @@ def autoframe_photo_file(
             if diagnostic_logger is not None:
                 diagnostic_logger.info("Autoframe backup: creado %s.", backup_path)
 
-        face_box = _autoframe_detect_face(image, diagnostic_logger)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        eye_centers = _autoframe_detect_eyes(gray, face_box) if face_box is not None else []
+        # Tier 1: Inferencia Neuronal YuNet (Deep Learning + 5 Landmarks)
+        neural_box, neural_eyes = _autoframe_detect_face_neural(image, diagnostic_logger)
+        if neural_box is not None and len(neural_eyes) >= 2:
+            face_box = neural_box
+            eye_centers = neural_eyes
+            crop_reason = "rostro_y_ojos_confirmados_por_red_neuronal_yunet"
+        else:
+            # Tier 2: Haar Cascades Fallback
+            face_box = _autoframe_detect_face(image, diagnostic_logger)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            eye_centers = _autoframe_detect_eyes(gray, face_box) if face_box is not None else []
+            crop_reason = "rostro_con_margen_superior_y_par_de_ojos_haar"
+
         if face_box is None or len(eye_centers) < 2:
             if diagnostic_logger is not None:
                 diagnostic_logger.warning(
@@ -1064,7 +1138,7 @@ def autoframe_photo_file(
                 "Autoframe crop: caja=%s salida=%s motivo=%s rostro=%s ojos=%s.",
                 crop_box,
                 AUTOFRAME_TARGET_SIZE,
-                "rostro_con_margen_superior_y_par_de_ojos_validado",
+                crop_reason,
                 face_box or "-",
                 eye_centers or "-",
             )
@@ -1130,9 +1204,20 @@ def list_available_cameras(
     max_index: int = 4,
 ) -> list[tuple[int, str, int, str, str]]:
     cameras: list[tuple[int, str, int, str, str]] = []
-    consecutive_failures = 0
-    for index in range(max_index):
-        found_any = False
+    
+    # En Linux, explorar indices basados en los nodos reales /dev/video*
+    candidate_indices = list(range(max_index))
+    if not sys.platform.startswith("win"):
+        import glob
+        for dev in sorted(glob.glob("/dev/video*")):
+            num_str = dev.replace("/dev/video", "")
+            if num_str.isdigit():
+                idx = int(num_str)
+                if idx not in candidate_indices:
+                    candidate_indices.append(idx)
+        candidate_indices.sort()
+
+    for index in candidate_indices:
         attempts = CAMERA_BACKENDS if sys.platform.startswith("win") else [("Automatico", cv2.CAP_ANY)]
         for _backend_name, backend_id in attempts:
             capture, detected_backend_name, detected_backend_id = try_open_camera(index, backend_id)
@@ -1141,18 +1226,17 @@ def list_available_cameras(
 
             width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-            alias = get_camera_alias(aliases, index, detected_backend_id)
+            
+            # Nombre personalizado para POCO / Loopback
+            if index == 10:
+                alias = "POCO X8 Pro (Wi-Fi)"
+            else:
+                alias = get_camera_alias(aliases, index, detected_backend_id)
             capture.release()
             cameras.append((index, f"{alias} ({width}x{height})", detected_backend_id, detected_backend_name, alias))
-            found_any = True
             break
-        if not found_any:
-            consecutive_failures += 1
-            if consecutive_failures >= 2 and index >= 2:
-                break
-        else:
-            consecutive_failures = 0
-    cameras.sort(key=lambda item: (camera_priority(item[4], item[3]), item[0]))
+
+    cameras.sort(key=lambda item: (0 if "poco" in item[4].lower() else camera_priority(item[4], item[3]), item[0]))
     return cameras
 
 
