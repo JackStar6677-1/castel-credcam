@@ -1228,10 +1228,7 @@ def list_available_cameras(
             height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             
             # Nombre personalizado para POCO / Loopback
-            if index == 10:
-                alias = "POCO X8 Pro (Wi-Fi)"
-            else:
-                alias = get_camera_alias(aliases, index, detected_backend_id)
+            alias = "POCO X8 Pro (Wi-Fi)" if index == 10 else get_camera_alias(aliases, index, detected_backend_id)
             capture.release()
             cameras.append((index, f"{alias} ({width}x{height})", detected_backend_id, detected_backend_name, alias))
             break
